@@ -1,15 +1,9 @@
 # Copyright 2025 Softwell S.r.l. - SPDX-License-Identifier: Apache-2.0
 
-"""Earthquake logger example — pure dataflow via interval + subscribe.
+"""Earthquake logger with application-owned polling.
 
-Pattern:
-    interval -> feed update event -> process_feed -> quakes insert event
-        -> log_event
-
-A single timer lives inside the resolver. The refresh writes the new
-feed value via the node mutation channel (emitting an update event), so
-a subscriber on 'feed' is the natural trigger for parsing — no external
-timer-subscribe is needed.
+The application explicitly fetches and publishes each feed. Bag subscriptions
+process the published data; Bag and its resolvers do not own a scheduler.
 
 Usage:
     pip install genro-bag[contrib-resolvers]
@@ -17,6 +11,8 @@ Usage:
 """
 
 import asyncio
+
+from genro_toolbox import smartawait
 
 from genro_bag import Bag
 from genro_bag.resolvers.contrib import EarthquakeResolver
@@ -34,7 +30,8 @@ class EarthquakeLogger:
     def __init__(self, interval: int = 10):
         self.interval = interval
         self.bag = Bag()
-        self.bag["feed.content"] = EarthquakeResolver()
+        self.feed_resolver = EarthquakeResolver()
+        self.bag["feed.content"] = None
         self.bag["feed"].subscribe("parser", update=self.process_feed)
         self.bag["quakes"] = Bag()
         self.bag["quakes"].subscribe("logger", insert=self.log_event)
@@ -73,10 +70,13 @@ class EarthquakeLogger:
             print("\nStopped.")
 
     async def main(self):
-        self.bag.get_node('feed.content').resolver.interval = self.interval
         print("Listening for new earthquakes...")
         print("Press Ctrl+C to stop.\n")
-        await asyncio.Event().wait()
+        while True:
+            self.feed_resolver.reset()
+            value = await smartawait(self.feed_resolver())
+            self.bag['feed.content'] = value
+            await asyncio.sleep(self.interval)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ import pytest
 from genro_bag import Bag
 
 
-@pytest.mark.parametrize('read', [Bag, Bag.from_xml])
+@pytest.mark.parametrize('read', [Bag.from_xml])
 def test_existing_suffix_is_preserved(read):
     bag = read('<root><item>A</item><item_1>B</item_1><item>C</item></root>')['root']
     assert [(n.label, n.value, n.xml_tag) for n in bag] == [

@@ -573,14 +573,10 @@ class BagNode(BagNodeNamesMixin):
         """
         new_attr = (attr or {}) | kwargs
 
-        refresh_resolver = False
         # Invalidate resolver cache if a resolver parameter's effective value changes
         # Effective value = node.attr if set, else resolver._kw
-        # If resolver.reactive is True, switch from lazy reset() to eager
-        # reset(refresh=True) so subscribers observe the new value without pull.
         if self._resolver is not None and (
             self._resolver.cache_time != 0
-            or self._resolver.reactive
         ):
             resolver_kw = self._resolver._kw
             internal = self._resolver.internal_params
@@ -588,10 +584,7 @@ class BagNode(BagNodeNamesMixin):
                 if key in resolver_kw and key not in internal:
                     effective_old = self._attr.get(key, resolver_kw[key])
                     if effective_old != value:
-                        if self._resolver.reactive:
-                            refresh_resolver = True
-                        else:
-                            self._resolver.reset()
+                        self._resolver.reset()
                         break
 
         # Save old state BEFORE any modification (only if needed for subscribers)
@@ -607,8 +600,6 @@ class BagNode(BagNodeNamesMixin):
             self._attr = {k: v for k, v in self._attr.items() if v is not None}
 
         # Synchronous refresh must see the new attributes, not the previous inputs.
-        if refresh_resolver:
-            self._resolver.reset(refresh=True)
 
         if trigger and oldattr is not None:
             diff = self._build_attr_diff(oldattr, self._attr)

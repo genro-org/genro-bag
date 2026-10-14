@@ -5,17 +5,20 @@ Tests for fixes in genro-bag core and wrapper:
 - Issue #36: XML serialization (static mode, False attributes)
 - Issue #36: JSON round-trip (node_tag, resolver metadata)
 
-All tests use bag_class_snake fixture (new + wrapper) since these
-are genro-bag specific bugs that don't apply to the original gnrbag.
+Tests cover the core and compatibility wrapper; XML tests also cover the
+deprecation wrapper, including signed resolvers in nested nodes and attributes.
 """
 
 import json
 
 import pytest
+from genro_toolbox import SignatureError, SignatureExpired
+from replacement.gnrbag import Bag as WrapperBag
+from replacement.gnrbag_wrapper import Bag as DeprecationBag
 
 import genro_bag
+from genro_bag._resolver_wire import RESOLVER_MARKER, decode_resolver
 from genro_bag.resolver import BagResolver
-
 
 # ---------------------------------------------------------------------------
 # Test resolver for JSON serialization round-trip.
@@ -122,10 +125,16 @@ class TestHashTraversal:
 # A2 + A3. XML serialization fixes
 # ===========================================================================
 
+@pytest.fixture(params=[genro_bag.Bag, WrapperBag, DeprecationBag],
+                ids=["new", "wrapper", "new_wrapper"])
+def xml_bag_class(request):
+    return request.param
+
+
 class TestXmlStaticAndAttrs:
     """Test XML serialization: static mode and False attribute handling."""
 
-    def test_xml_no_resolver_trigger(self, bag_class_snake):
+    def test_xml_no_resolver_trigger(self, xml_bag_class):
         """XML serialization must NOT trigger resolvers.
 
         A resolver that raises on execution is attached to a node.
@@ -145,7 +154,7 @@ class TestXmlStaticAndAttrs:
             def load(self):
                 raise RuntimeError("Resolver should not be triggered during XML serialization")
 
-        bag = bag_class_snake()
+        bag = xml_bag_class()
         resolver = _RaisingResolver()
         bag.set_item("data", None, resolver=resolver)
 
@@ -153,13 +162,13 @@ class TestXmlStaticAndAttrs:
         xml = bag.to_xml()
         assert "<data" in xml
 
-    def test_xml_false_attribute_preserved(self, bag_class_snake):
+    def test_xml_false_attribute_preserved(self, xml_bag_class):
         """Attributes with value False must appear in XML output.
 
         False is a valid attribute value, distinct from None (which means
         "no value" and is correctly omitted).
         """
-        bag = bag_class_snake()
+        bag = xml_bag_class()
         bag.set_item("node", "hello", _attributes={"active": False, "visible": True})
         xml = bag.to_xml()
 
@@ -171,14 +180,51 @@ class TestXmlStaticAndAttrs:
         assert "visible=" in xml
         assert "True" in xml
 
-    def test_xml_none_attribute_omitted(self, bag_class_snake):
+    def test_xml_none_attribute_omitted(self, xml_bag_class):
         """Attributes with value None should still be omitted from XML."""
-        bag = bag_class_snake()
+        bag = xml_bag_class()
         bag.set_item("node", "hello", _attributes={"present": "yes", "absent": None})
         xml = bag.to_xml()
 
         assert 'present="yes"' in xml
         assert "absent" not in xml
+
+
+    @pytest.mark.parametrize("location", ["node", "attribute"])
+    def test_nested_xml_resolver_signing(self, xml_bag_class, location, monkeypatch):
+        """Every adapter forwards signing and expiry through nested Bags."""
+        resolver = _TestResolver(10, multiplier=3)
+        expected = resolver.serialize()
+
+        def fail_if_loaded(self):
+            raise AssertionError("XML must not load a resolver")
+
+        monkeypatch.setattr(_TestResolver, "load", fail_if_loaded)
+        bag = xml_bag_class()
+        child = xml_bag_class()
+        grandchild = xml_bag_class()
+        bag.set_item("outer", child)
+        child.set_item("inner", grandchild)
+        if location == "node":
+            grandchild.set_item("computed", None, resolver=resolver)
+        else:
+            grandchild.set_item("computed", "static", _attributes={"loader": resolver})
+
+        with monkeypatch.context() as clock:
+            clock.setattr("genro_toolbox.signing.time.time", lambda: 1000)
+            xml = bag.to_xml(sign_key="test-key", expires_in=60)
+            restored = xml_bag_class.from_xml(xml, sign_key="test-key")
+            node = restored.get_node("outer.inner.computed")
+            decoded = node.resolver if location == "node" else node.attr["loader"]
+            assert isinstance(decoded, _TestResolver)
+            assert decoded.serialize() == expected
+            assert node.static_value == (None if location == "node" else "static")
+
+            with pytest.raises(SignatureError):
+                xml_bag_class.from_xml(xml, sign_key="wrong-key")
+            clock.setattr("genro_toolbox.signing.time.time", lambda: 1061)
+            with pytest.raises(SignatureExpired):
+                xml_bag_class.from_xml(xml, sign_key="test-key")
 
 
 # ===========================================================================
@@ -202,8 +248,10 @@ class TestJsonRoundTrip:
         assert node.node_tag == "custom_type"
 
         # Round-trip through JSON
-        json_str = bag.to_json()
-        restored = bag_class_snake.from_json(json_str)
+        if bag_class_snake is genro_bag.Bag:
+            restored = bag_class_snake.from_tytx(bag.to_tytx())
+        else:
+            restored = bag_class_snake.from_json(bag.to_json())
 
         restored_node = restored.get_node("item")
         assert restored_node is not None
@@ -239,8 +287,7 @@ class TestJsonRoundTrip:
         assert bag["computed"] == 30
 
         # Round-trip through JSON
-        json_str = bag.to_json()
-        restored = Bag.from_json(json_str)
+        restored = Bag.from_tytx(bag.to_tytx())
 
         # Verify resolver is reconstructed
         restored_node = restored.get_node("computed")
@@ -266,5 +313,10 @@ class TestJsonRoundTrip:
         assert isinstance(data, list)
         node_dict = data[0]
         assert "resolver" in node_dict
-        assert node_dict["resolver"]["resolver_class"] == "_TestResolver"
-        assert node_dict["resolver"]["resolver_module"] == __name__
+        payload = node_dict["resolver"]
+        assert isinstance(payload, str)
+        assert payload.startswith(RESOLVER_MARKER)
+        restored = decode_resolver(payload)
+        assert isinstance(restored, _TestResolver)
+        assert restored.serialize() == resolver.serialize()
+        assert restored() == 30

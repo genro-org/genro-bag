@@ -1,5 +1,7 @@
 # What is Bag?
 
+See the [0.28.0 ingestion and scheduling migration note](migrations/next-ingestion-api.md).
+
 [![GitHub](https://img.shields.io/badge/GitHub-genro--bag-blue?logo=github)](https://github.com/genropy/genro-bag)
 
 A Bag is an **intermediate representation** (IR) that bridges the gap between how humans think about structured data and how software implements it.

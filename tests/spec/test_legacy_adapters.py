@@ -16,7 +16,7 @@ def test_bag_signatures_identity_and_mixed_dispatch():
             value = super().get_item(path, *args, **kwargs)
             return value.upper() if isinstance(value, str) else value
 
-    bag = UpperBag(customer=UpperBag(name="Ada"))
+    bag = UpperBag({"customer": UpperBag({"name": "Ada"})})
     assert bag.getItem("customer.name") == "ADA"
     assert type(bag) is UpperBag
     assert type(bag.get_item("customer")) is UpperBag
@@ -27,8 +27,8 @@ def test_bag_signatures_identity_and_mixed_dispatch():
         def getItem(self, path, default=None, mode=None):
             return super().getItem(path, default, mode).upper()
 
-    assert LegacyOverride(name="Ada").getItem("name") == "ADA"
-    with pytest.raises(TypeError, match="either source or keyword items"):
+    assert LegacyOverride({"name": "Ada"}).getItem("name") == "ADA"
+    with pytest.raises(TypeError, match="unexpected keyword"):
         Bag({"a": 1}, b=2)
 
 
@@ -76,7 +76,7 @@ def test_static_reads_and_node_keyword_translation():
 
 def test_parent_navigation_repeated_backref_and_modern_reparenting():
     root = Bag()
-    child = Bag(leaf=1)
+    child = Bag({'leaf': 1})
     root.setItem("child", child)
     root.setBackRef()
     attached_node = root.getNode("child")
@@ -106,7 +106,7 @@ def test_bag_and_node_legacy_subscription_forms():
     def on_node(**event):
         node_events.append(event["evt"])
 
-    bag = Bag(item=1)
+    bag = Bag({'item': 1})
     bag.subscribe(subscriberId="legacy", any=on_bag)
     node = bag.getNode("item")
     node.subscribe(subscriberId="legacy-node", callback=on_node)
@@ -281,7 +281,7 @@ def test_resolver_serialization_overrides_base_calls_and_init_aliases():
 
 
 def test_pickle_roundtrip_restores_native_identity_and_backrefs():
-    bag = Bag(root=Bag(leaf=1))
+    bag = Bag({'root': Bag({'leaf': 1})})
     bag.setBackRef()
     restored = pickle.loads(pickle.dumps(bag))
     assert type(restored) is Bag

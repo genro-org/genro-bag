@@ -3,26 +3,10 @@
 Depends on test_basic.py (set_item, get_item, get_attr, __len__,
 __iter__, __contains__) and test_query.py (query, keys, values, items).
 
-## Scale
-
-1.  fill_from(None)                 no-op, returns self
-2.  fill_from(dict)                 reconstruction from dict, nested dict -> Bag
-3.  fill_from(list)                 numbered items 0,1,2... dict item -> Bag
-4.  fill_from(Bag)                  deep clone of nodes
-5.  fill_from(bytes)                delegates after utf-8 decode
-6.  fill_from(str) inline XML/JSON  detect from first character
-7.  fill_from(file path .bag.json)  transport JSON (TYTX)
-8.  fill_from(file path .bag.mp)    transport MessagePack
-9.  fill_from(file path .xml)       transport XML
-10. fill_from(Path)                 pathlib.Path equivalent to str
-11. fill_from explicit transport    override extension
-12. fill_from raise on invalid type
-13. fill_from atomic semantics      error -> self unchanged
-14. fill_from chainable             returns self
-15. deepcopy isolation              changes to copy don't touch original
-16. update(dict) / update(Bag)      merge / ignore_none / nested
-17. pickle roundtrip                __getstate__ / __setstate__
-18. from_url                        network marker, smoke test
+Contracts: in-memory fill_from is atomic and chainable, with None clearing
+contents and recursive dict/list conversion. Copying, serialized text and files
+use deepcopy, from_tytx, from_xml and from_file explicitly. Update, pickle and
+from_url retain their existing contracts.
 """
 
 from __future__ import annotations
@@ -42,18 +26,18 @@ from genro_bag.resolvers import BagCbResolver
 
 
 class TestFillFromNone:
-    def test_none_source_is_noop(self):
-        """fill_from(None) changes nothing and returns self."""
+    def test_none_source_clears(self):
+        """fill_from(None) clears contents and returns self."""
         bag = Bag({"a": 1})
         result = bag.fill_from(None)
         assert result is bag
-        assert bag.get_item("a") == 1
+        assert len(bag) == 0
 
     def test_no_args_equivalent_to_none(self):
-        """fill_from() without arguments (source default None) is no-op."""
+        """fill_from() without arguments (source default None) clears contents."""
         bag = Bag({"a": 1})
         bag.fill_from()
-        assert bag.get_item("a") == 1
+        assert len(bag) == 0
 
 
 # =============================================================================
@@ -91,19 +75,19 @@ class TestFillFromDict:
 
 class TestFillFromList:
     def test_list_creates_numbered_nodes(self):
-        """fill_from(list) creates labels '0', '1', '2'..."""
+        """fill_from(list) creates padded labels 'r_00', 'r_01', 'r_02'..."""
         bag = Bag()
         bag.fill_from(["a", "b", "c"])
-        assert bag.get_item("0") == "a"
-        assert bag.get_item("1") == "b"
-        assert bag.get_item("2") == "c"
+        assert bag.get_item("r_00") == "a"
+        assert bag.get_item("r_01") == "b"
+        assert bag.get_item("r_02") == "c"
 
     def test_list_of_dicts_converts_each_to_bag(self):
         """Dict items in a list become nested Bags."""
         bag = Bag()
         bag.fill_from([{"name": "alice"}, {"name": "bob"}])
-        assert bag.get_item("0.name") == "alice"
-        assert bag.get_item("1.name") == "bob"
+        assert bag.get_item("r_00.name") == "alice"
+        assert bag.get_item("r_01.name") == "bob"
 
     def test_empty_list_empties_bag(self):
         """fill_from([]) empties the bag."""
@@ -117,14 +101,14 @@ class TestFillFromList:
 # =============================================================================
 
 
-class TestFillFromBag:
+class TestExplicitBagCopy:
     def test_copies_nodes_from_source_bag(self):
-        """fill_from(Bag) copies labels, values and attributes."""
+        """deepcopy copies labels, values and attributes."""
         src = Bag()
         src.set_item("a", 1, _attributes={"type": "int"})
         src.set_item("b", "hi")
         dst = Bag()
-        dst.fill_from(src)
+        dst = src.deepcopy()
         assert dst.get_item("a") == 1
         assert dst.get_attr("a", "type") == "int"
         assert dst.get_item("b") == "hi"
@@ -134,7 +118,7 @@ class TestFillFromBag:
         src = Bag()
         src["nest.inner"] = 42
         dst = Bag()
-        dst.fill_from(src)
+        dst = src.deepcopy()
         # modify the destination, original doesn't change
         dst["nest.inner"] = 99
         assert src.get_item("nest.inner") == 42
@@ -145,11 +129,11 @@ class TestFillFromBag:
 # =============================================================================
 
 
-class TestFillFromBytes:
+class TestExplicitBytesRead:
     def test_bytes_json_inline_is_decoded(self):
         """Bytes containing inline JSON is decoded as JSON."""
         bag = Bag()
-        bag.fill_from(b'{"a": 1, "b": 2}')
+        bag = Bag.from_tytx(b'{"a": 1, "b": 2}')
         assert bag.get_item("a") == 1
         assert bag.get_item("b") == 2
 
@@ -159,11 +143,11 @@ class TestFillFromBytes:
 # =============================================================================
 
 
-class TestFillFromInlineStr:
+class TestExplicitTextRead:
     def test_json_inline_detected_by_leading_brace(self):
         """String starting with '{' is parsed as JSON."""
         bag = Bag()
-        bag.fill_from('{"a": 1, "b": 2}')
+        bag = Bag.from_tytx('{"a": 1, "b": 2}')
         assert bag.get_item("a") == 1
         assert bag.get_item("b") == 2
 
@@ -173,15 +157,15 @@ class TestFillFromInlineStr:
         A top-level JSON list produces nodes with 'r_' prefix and index.
         """
         bag = Bag()
-        bag.fill_from("[10, 20, 30]")
-        assert bag.get_item("r_0") == 10
-        assert bag.get_item("r_1") == 20
-        assert bag.get_item("r_2") == 30
+        bag = Bag.from_tytx("[10, 20, 30]")
+        assert bag.get_item("r_00") == 10
+        assert bag.get_item("r_01") == 20
+        assert bag.get_item("r_02") == 30
 
     def test_xml_inline_detected_by_leading_angle(self):
         """String starting with '<' is parsed as XML."""
         bag = Bag()
-        bag.fill_from("<root><a>1</a></root>")
+        bag = Bag.from_xml("<root><a>1</a></root>")
         # the root element is a container wrapping the node 'a'
         assert bag.get_item("root.a") == "1"
 
@@ -191,14 +175,14 @@ class TestFillFromInlineStr:
 # =============================================================================
 
 
-class TestFillFromFile:
+class TestFromFile:
     def test_bag_json_file(self, tmp_path: Path):
         """File with .bag.json extension uses JSON transport (TYTX)."""
         # to_tytx automatically adds .bag.json to the filename argument
         src = Bag({"a": 1, "b": "hello"})
         src.to_tytx(filename=str(tmp_path / "sample"), transport="json")
         target = Bag()
-        target.fill_from(str(tmp_path / "sample.bag.json"))
+        target = Bag.from_file(str(tmp_path / "sample.bag.json"))
         assert target.get_item("a") == 1
         assert target.get_item("b") == "hello"
 
@@ -207,7 +191,7 @@ class TestFillFromFile:
         src = Bag({"a": 1, "b": "hello"})
         src.to_tytx(filename=str(tmp_path / "sample"), transport="msgpack")
         target = Bag()
-        target.fill_from(str(tmp_path / "sample.bag.mp"))
+        target = Bag.from_file(str(tmp_path / "sample.bag.mp"))
         assert target.get_item("a") == 1
         assert target.get_item("b") == "hello"
 
@@ -216,20 +200,20 @@ class TestFillFromFile:
         file = tmp_path / "sample.xml"
         file.write_text("<root><a>1</a></root>", encoding="utf-8")
         bag = Bag()
-        bag.fill_from(str(file))
+        bag = Bag.from_file(str(file))
         assert bag.get_item("root.a") == "1"
 
     def test_file_not_found_raises(self):
         """Non-existent file raises FileNotFoundError."""
         with pytest.raises(FileNotFoundError):
-            Bag().fill_from("/nonexistent/path/file.xml")
+            Bag.from_file("/nonexistent/path/file.xml")
 
     def test_unrecognized_extension_raises(self, tmp_path: Path):
         """Unrecognized extension without explicit transport raises ValueError."""
         file = tmp_path / "sample.unknown"
         file.write_text("nothing", encoding="utf-8")
         with pytest.raises(ValueError):
-            Bag().fill_from(str(file))
+            Bag.from_file(str(file))
 
 
 # =============================================================================
@@ -237,13 +221,13 @@ class TestFillFromFile:
 # =============================================================================
 
 
-class TestFillFromPath:
+class TestFromFilePath:
     def test_pathlib_path_works_like_str(self, tmp_path: Path):
         """A pathlib.Path is equivalent to a path string."""
         file = tmp_path / "sample.xml"
         file.write_text("<root><a>1</a></root>", encoding="utf-8")
         bag = Bag()
-        bag.fill_from(file)
+        bag = Bag.from_file(file)
         assert bag.get_item("root.a") == "1"
 
 
@@ -252,7 +236,7 @@ class TestFillFromPath:
 # =============================================================================
 
 
-class TestFillFromExplicitTransport:
+class TestFromFileExplicitTransport:
     def test_transport_overrides_extension(self, tmp_path: Path):
         """transport='json' forces format regardless of extension."""
         src = Bag({"a": 1})
@@ -263,7 +247,7 @@ class TestFillFromExplicitTransport:
         weird.write_text(raw, encoding="utf-8")
 
         target = Bag()
-        target.fill_from(str(weird), transport="json")
+        target = Bag.from_file(str(weird), transport="json")
         assert target.get_item("a") == 1
 
 
@@ -300,10 +284,10 @@ class TestFillFromAtomic:
         assert bag.get_item("b") == 2
         assert bag.keys() == ["a", "b"]
 
-    def test_filenotfound_leaves_bag_unchanged(self):
-        """Non-existent file: self remains unchanged after exception."""
+    def test_unsupported_source_leaves_bag_unchanged(self):
+        """A path is not a data source: self remains unchanged after rejection."""
         bag = Bag({"a": 1})
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(TypeError):
             bag.fill_from("/nonexistent/file.xml")
         assert bag.get_item("a") == 1
 

@@ -458,9 +458,9 @@ class TestSetBackref:
 
 class TestTimerValidation:
     def test_timer_without_interval_raises(self):
-        """subscribe(timer=cb) without interval raises ValueError."""
+        """subscribe(timer=cb) without interval raises TypeError."""
         bag = Bag()
-        with pytest.raises(ValueError):
+        with pytest.raises(TypeError):
             bag.subscribe("s1", timer=lambda **kw: None)
 
 

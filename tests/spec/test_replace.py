@@ -89,7 +89,16 @@ def test_deprecated_fill_methods_and_warning_free_construction():
         bag = Bag({'x': 1})
         bag.replace(Bag({'y': 2}))
     assert not caught
-    for name in ('fillFrom', 'fill_from'):
+    for name in ('fillFrom',):
         with pytest.warns(DeprecationWarning):
             assert getattr(bag, name)({'z': 3}) is bag
         assert bag.keys() == ['z']
+
+
+def test_modern_fill_from_is_not_deprecated():
+    bag = Bag()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        assert bag.fill_from({'value': 1}) is bag
+    assert not caught
+    assert bag['value'] == 1

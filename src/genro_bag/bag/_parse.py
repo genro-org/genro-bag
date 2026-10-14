@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime
 import io
 import re
+import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal
 from xml import sax
@@ -21,10 +22,15 @@ from xml.sax import saxutils
 from xml.sax.handler import ContentHandler
 
 from genro_toolbox import SignatureError
-from genro_tytx import SUFFIX_TO_TYPE
 from genro_tytx import from_tytx as tytx_decode
 
-from genro_bag._resolver_wire import decode_attrs, decode_resolver, has_nested_resolver
+from genro_bag._resolver_wire import (
+    _decode_bag_class,
+    _decode_sign_key,
+    decode_attrs,
+    decode_resolver,
+    has_nested_resolver,
+)
 from genro_bag._subtype_wire import CLS_ATTRIBUTE, get_inherited_class, get_subtype_class
 from genro_bag.bag._exceptions import BagSerializationError
 
@@ -159,70 +165,68 @@ class BagParser:
 
     @classmethod
     def from_tytx(
-        cls,
-        data: str | bytes,
-        transport: Literal["json", "msgpack"] = "json",
-        sign_key: str | None = None,
+        cls, data: str | bytes, transport: Literal["json", "msgpack"] = "json",
+        sign_key: str | None = None, *, recursive: bool = True,
     ) -> Bag:
-        """Deserialize Bag from TYTX format.
+        """Read ordinary JSON or TYTX, restoring a marked Bag or converting data.
 
-        Reconstructs a complete Bag hierarchy from TYTX-encoded data.
-        Rebuilt resolvers are inert: nothing is called until the caller
-        reads the value.
-
-        Args:
-            data: Serialized data from to_tytx(). An empty payload is the
-                branch-node marker "::X" stripped of its suffix and decodes
-                to an empty Bag.
-            transport: Input format matching how data was serialized:
-                - 'json': JSON string
-                - 'msgpack': Binary bytes
-            sign_key: Secret key. When given, every resolver payload must
-                carry a valid signature — required for data of untrusted
-                origin, since a resolver's arguments say what it will act on.
-
-        Returns:
-            Reconstructed Bag with all nodes, values, and attributes.
-
-        Raises:
-            BagSerializationError: If a parent reference cannot be resolved.
-            ImportError: If genro-tytx package is not installed.
-            TypeError: If data is neither str nor bytes (only the empty
-                payload means a branch node).
-            SignatureError: Signature missing, forged or expired, when
-                sign_key was given — including a resolver inside a Bag
-                nested in a plain container value, which the type registry
-                hydrates without any signature check.
+        Only dict/list roots and explicitly typed Bags are accepted. A marked
+        Bag retains its original structure regardless of recursive. Resolver
+        signatures are verified while registered Bag payloads are decoded.
         """
-        # An empty payload is the branch-node marker "::X" stripped of its
-        # suffix: a node that is a Bag but has no children yet. TYTX hands it
-        # here as "" once Bag is a registered custom type. Only the empty
-        # payload means that; anything else (None included) is a caller error.
-        # The payload alone decides the class of the root: without __cls it is
-        # the class registered for the suffix (Bag for "X"), whatever cls is.
-        suffix = cls.__tytx_suffix__
-        if data == "" or data == b"":
-            empty: Bag = get_inherited_class(None, suffix)()
-            return empty
         if not isinstance(data, (str, bytes)):
-            raise TypeError(f"from_tytx() requires str or bytes, got {type(data).__name__}")
-        parsed = tytx_decode(data, transport=transport if transport != "json" else None)
+            raise TypeError("from_tytx requires serialized text or bytes")
+        if not isinstance(recursive, bool):
+            raise TypeError("recursive must be a bool")
+        if transport not in ("json", "msgpack"):
+            raise ValueError(f"Unsupported transport: {transport}")
+        if transport == "json" and isinstance(data, bytes):
+            data = data.decode("utf-8")
+        token = _decode_sign_key.set(sign_key)
+        class_token = _decode_bag_class.set(cls if cls.__tytx_suffix__ == "X" else None)
+        try:
+            # Calling a legacy subclass directly retains its class factory.
+            suffix = f"::{cls.__tytx_suffix__}"
+            if isinstance(data, str) and data.endswith(suffix):
+                return cls._from_tytx_payload(data[:-len(suffix)])
+            decoded = tytx_decode(data, transport=None if transport == "json" else transport)
+        finally:
+            _decode_sign_key.reset(token)
+            _decode_bag_class.reset(class_token)
+        if isinstance(decoded, BagParser):
+            return decoded
+        if not isinstance(decoded, (dict, list)):
+            raise TypeError("from_tytx requires a dict, list or typed Bag root")
+        if sign_key is not None and has_nested_resolver(decoded):
+            raise SignatureError("a nested Bag carries a resolver outside the signature contract")
+        return cls(decoded, recursive=recursive)
+
+
+    @classmethod
+    def _from_tytx_payload(cls, data: str) -> Bag:
+        """Registry hook: decode only a payload explicitly identified as a Bag."""
+        suffix = cls.__tytx_suffix__
+        default_class = cls if cls.__module__.startswith("replacement.") else get_inherited_class(None, suffix)
+        if data == "":
+            return default_class()
+        sign_key = _decode_sign_key.get()
+        parsed = tytx_decode(data)
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("rows"), list):
+            raise BagSerializationError("Invalid TYTX Bag: expected rows")
         rows = parsed["rows"]
         paths_raw = parsed.get("paths")
-        code_to_path: dict[int, str] | None = (
+        code_to_path: dict[int, str | list[str]] | None = (
             {int(k): v for k, v in paths_raw.items()} if paths_raw is not None else None
         )
 
         root_cls = parsed.get(CLS_ATTRIBUTE)
-        root_class = (
-            get_subtype_class(suffix, root_cls)
-            if root_cls is not None
-            else get_inherited_class(None, suffix)
-        )
-        bag: Bag = root_class()
-        path_to_bag: dict[str, Any] = {"": bag}
+        root_class = get_subtype_class(suffix, root_cls) if root_cls is not None else default_class
+        bag = root_class()
+        path_to_bag: dict[tuple, Any] = {(): bag}
 
         for row in rows:
+            if not isinstance(row, (list, tuple)) or len(row) != 5:
+                raise BagSerializationError("Invalid TYTX Bag row")
             parent_ref, label, tag, value, attr = row
 
             # Resolve parent path
@@ -233,44 +237,39 @@ class BagParser:
             else:
                 parent_path = parent_ref if parent_ref is not None else ""
 
+            if isinstance(parent_path, list):
+                parent_path = tuple(parent_path)
+            elif isinstance(parent_path, str):
+                parent_path = tuple(parent_path.split(".")) if parent_path else ()
+            else:
+                raise BagSerializationError("Invalid TYTX parent path")
             if parent_path not in path_to_bag:
                 raise BagSerializationError(
                     f"Missing or undecodable TYTX parent branch: {parent_path!r}"
                 )
             parent_bag = path_to_bag[parent_path]
-            full_path = f"{parent_path}.{label}" if parent_path else label
+            full_path = (*parent_path, label)
             attr = decode_attrs(attr, sign_key)
 
-            # JSON already hydrates registered branches. MessagePack preserves
-            # text: only exact empty markers owned by Bag types are structural.
-            if transport == "msgpack" and isinstance(value, str) and value.startswith("::"):
-                entry = SUFFIX_TO_TYPE.get(value[2:])
-                if entry is not None and issubclass(entry[0], BagParser):
-                    value = tytx_decode(value)
             branch_cls = attr.pop(CLS_ATTRIBUTE, None)
-            if hasattr(value, "traverse") and hasattr(value, "_nodes"):
+            if hasattr(value, "_nodes") and isinstance(value, BagParser):
                 # Rows carry empty branches; descendants are populated below.
-                # The class is the __cls name, or the one inherited from the parent.
+                # Legacy X subclasses keep the historical root-class factory.
+                child_class = type(value)
+                if child_class.__tytx_suffix__ == "X" and cls.__tytx_suffix__ == "X":
+                    child_class = cls
                 branch_suffix = type(value).__tytx_suffix__
-                child_class = (
-                    get_subtype_class(branch_suffix, branch_cls)
-                    if branch_cls is not None
-                    else get_inherited_class(type(parent_bag), branch_suffix)
-                )
+                child_class = (get_subtype_class(branch_suffix, branch_cls) if branch_cls is not None
+                               else get_inherited_class(type(parent_bag), branch_suffix))
                 child_bag = child_class()
-                parent_bag.set_item(label, child_bag, _attributes=attr)
+                parent_bag._append_literal(label, child_bag, attr, node_tag=tag)
                 path_to_bag[full_path] = child_bag
             elif branch_cls is not None:
-                raise BagSerializationError(
-                    f"node {full_path!r}: the attribute {CLS_ATTRIBUTE!r} is reserved "
-                    "for the Bag class name of a branch"
-                )
-            elif value == "::NN":
-                parent_bag.set_item(label, None, _attributes=attr)
+                raise BagSerializationError(f"node {full_path!r}: reserved {CLS_ATTRIBUTE!r} on a scalar")
             else:
                 resolver = decode_resolver(value, sign_key)
                 if resolver is not None:
-                    parent_bag.set_item(label, None, _attributes=attr, resolver=resolver)
+                    parent_bag._append_literal(label, None, attr, resolver, tag)
                 else:
                     # A Bag hydrated inside a plain container came through the
                     # TYTX type registry, whose hooks take no sign_key: a
@@ -282,11 +281,11 @@ class BagParser:
                             "container value carries a resolver whose "
                             "signature cannot be verified on this path"
                         )
-                    parent_bag.set_item(label, value, _attributes=attr)
+                    parent_bag._append_literal(label, value, attr, node_tag=tag)
 
             # Set tag if present
             if tag:
-                node = parent_bag.get_node(label)
+                node = parent_bag._nodes[label]
                 if node:
                     node.node_tag = tag
 
@@ -295,121 +294,19 @@ class BagParser:
     # ==================== from_json ====================
 
     @classmethod
-    def from_json(
-        cls,
-        source: str | dict | list,
-        list_joiner: str | None = None,
-        sign_key: str | None = None,
-        *,
-        legacy_mode: bool = False,
-        catalog: Any = None,
-    ) -> Bag:
-        """Deserialize JSON to Bag.
-
-        Accepts JSON string, dict, or list. Recursively converts nested
-        structures to Bag hierarchy. Uses TYTX for parsing (orjson + type decoding).
-
-        Rebuilt resolvers are inert: nothing is called until the caller
-        reads the value.
-
-        Args:
-            source: JSON string, dict or list to parse.
-            list_joiner: If provided, join string lists with this separator.
-            sign_key: Secret key. When given, every resolver payload must
-                carry a valid signature — required for data of untrusted
-                origin, since a resolver's arguments say what it will act on.
-
-        Returns:
-            Deserialized Bag.
-
-        Raises:
-            SignatureError: Signature missing, forged or expired, when
-                sign_key was given.
-        """
+    def from_json(cls, source: str | bytes, *, recursive: bool = True, sign_key=None,
+                  legacy_mode: bool = False, catalog=None, list_joiner=None) -> Bag:
+        """Deprecated modern reader alias; legacy_mode is an explicit compatibility codec."""
         if legacy_mode:
             if sign_key is not None:
-                raise ValueError(
-                    "Legacy JSON does not carry resolver signatures; "
-                    "sign_key is supported only by the modern wire"
-                )
+                raise ValueError("Legacy JSON does not carry resolver signatures")
             from genro_bag._legacy_codec import legacy_from_json
+            return legacy_from_json(cls, source, list_joiner=list_joiner, catalog=catalog)
+        if list_joiner is not None or catalog is not None:
+            raise TypeError("list_joiner and catalog are only supported in legacy_mode")
+        warnings.warn("Bag.from_json is deprecated; use Bag.from_tytx", DeprecationWarning, stacklevel=2)
+        return cls.from_tytx(source, recursive=recursive, sign_key=sign_key)
 
-            return legacy_from_json(
-                cls, source, list_joiner=list_joiner, catalog=catalog
-            )
-
-        if isinstance(source, str):
-            source = tytx_decode(source)
-            # A Bag hydrated by the TYTX type registry inside the decoded
-            # structure carries live resolvers that were never signature-
-            # checked — same refusal as from_tytx. Legitimate signed
-            # resolvers are still ::RSLV: strings at this point, so any
-            # live resolver found here came through the unsigned path.
-            if sign_key is not None and has_nested_resolver(source):
-                raise SignatureError(
-                    "a Bag nested in a plain value carries a resolver whose "
-                    "signature cannot be verified on this path"
-                )
-
-        if not isinstance(source, (list, dict)):
-            # Wrap scalar in a dict
-            source = {"value": source}
-
-        return cls._from_json_recursive(source, list_joiner, sign_key=sign_key)  # type: ignore[no-any-return]
-
-    @classmethod
-    def _from_json_recursive(
-        cls,
-        data: dict | list | Any,
-        list_joiner: str | None = None,
-        parent_key: str | None = None,
-        sign_key: str | None = None,
-    ) -> Any:
-        """Recursively convert JSON data to Bag."""
-        if isinstance(data, list):
-            if not data:
-                return cls()
-
-            # Check if list items have 'label' key (Bag node format)
-            if isinstance(data[0], dict) and "label" in data[0]:
-                result = cls()
-                for item in data:
-                    label = item.get("label")
-                    value = cls._from_json_recursive(
-                        item.get("value"), list_joiner, sign_key=sign_key
-                    )
-                    attr = decode_attrs(item.get("attr", {}), sign_key)
-                    resolver = None
-                    if "resolver" in item:
-                        resolver = decode_resolver(item["resolver"], sign_key)
-                    node_tag = item.get("tag")
-                    result.set_item(
-                        label, value, _attributes=attr,
-                        resolver=resolver, node_tag=node_tag,
-                    )
-                return result
-
-            # String list with joiner
-            if list_joiner and all(isinstance(r, str) for r in data):
-                return list_joiner.join(data)
-
-            # Generic list -> Bag with prefix from parent key
-            result = cls()
-            prefix = parent_key if parent_key else "r"
-            for n, v in enumerate(data):
-                result.set_item(f"{prefix}_{n}", cls._from_json_recursive(v, list_joiner))
-            return result
-
-        if isinstance(data, dict):
-            if not data:
-                return cls()
-            result = cls()
-            for k, v in data.items():
-                result.set_item(k, cls._from_json_recursive(v, list_joiner, parent_key=k))
-            return result
-
-        # Scalar value
-        return data
 
 
 # =============================================================================

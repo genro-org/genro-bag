@@ -24,7 +24,7 @@ def test_traverse_is_lazy_and_does_not_resolve_values():
     class Resolver(BagResolver):
         def load(self):
             calls.append('load')
-            return Bag(leaf=1)
+            return Bag({'leaf': 1})
 
     bag = Bag()
     bag.set_item('lazy', Resolver())
@@ -36,7 +36,7 @@ def test_traverse_is_lazy_and_does_not_resolve_values():
 
 
 def test_traverse_visits_shared_subtrees_at_each_occurrence():
-    shared = Bag(leaf=1)
+    shared = Bag({'leaf': 1})
     bag = Bag()
     bag.set_item('a', shared)
     bag.set_item('b', shared)

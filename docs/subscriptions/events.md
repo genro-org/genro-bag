@@ -347,7 +347,7 @@ You can set different callbacks for different events:
 
 ## Timer subscriptions
 
-`subscribe(timer=..., interval=...)` raises `ValueError`. Scheduling belongs
+`subscribe(timer=..., interval=...)` raises `TypeError`. Scheduling belongs
 to the application; ordinary Bag change callbacks execute synchronously.
 
 ## The `reason` Field
@@ -408,7 +408,7 @@ genuine insert/update with `reason=None`.
 
 ## Stop Propagation
 
-Any callback (ins, upd, del, tmr) can return `False` to stop event
+Any callback (ins, upd, del) can return `False` to stop event
 propagation to parent bags:
 
 ```python

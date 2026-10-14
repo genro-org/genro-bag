@@ -1,5 +1,7 @@
 # genro-bag
 
+> **0.28.0 — breaking API:** read the [ingestion and scheduling migration note](docs/migrations/next-ingestion-api.md) before upgrading dependent projects.
+
 [![PyPI version](https://img.shields.io/pypi/v/genro-bag)](https://pypi.org/project/genro-bag/)
 [![Tests](https://github.com/genropy/genro-bag/actions/workflows/tests.yml/badge.svg)](https://github.com/genropy/genro-bag/actions/workflows/tests.yml)
 [![codecov](https://codecov.io/gh/genropy/genro-bag/branch/main/graph/badge.svg)](https://codecov.io/gh/genropy/genro-bag)

@@ -21,9 +21,9 @@ loader results are rejected. `BagAsyncCbResolver` remains importable only to
 raise an explicit migration error when constructed. Move asynchronous I/O
 outside the Bag and store its completed result as ordinary data.
 
-`reset()` invalidates the cache lazily. `reset(refresh=True)` reloads inline;
-reactive attribute changes also refresh inline. Their errors propagate to the
-caller. There is no next-tick coalescing or background execution.
+`reset()` invalidates the cache without loading. The next explicit read reloads;
+attribute changes also invalidate the cache and never trigger eager refresh.
+`reset(refresh=True)`, `reactive` and `interval` are no longer accepted.
 
-Resolver intervals and Bag timer subscriptions are unsupported. The application
-owns any scheduler and calls synchronous Bag operations when work is due.
+Resolver intervals and Bag timer subscriptions raise `TypeError`. The application
+owns scheduling and calls synchronous Bag operations when work is due.

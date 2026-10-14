@@ -25,12 +25,16 @@ Trust
 from __future__ import annotations
 
 import json
+from contextvars import ContextVar
 from typing import Any
 
 from genro_toolbox import SignatureError, safe_is_instance, sign, verify
 
 from genro_bag.bag._exceptions import BagSerializationError
 from genro_bag.resolver import BagResolver
+
+_decode_bag_class: ContextVar[type | None] = ContextVar("bag_decode_class", default=None)
+_decode_sign_key: ContextVar[str | None] = ContextVar("bag_decode_sign_key", default=None)
 
 RESOLVER_MARKER = "::RSLV:"
 

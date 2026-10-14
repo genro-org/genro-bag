@@ -125,7 +125,7 @@ def test_resolver_digest_forwards_through_normal_cache():
 
 
 def test_list_subclass_with_items_uses_named_population():
-    bag = Bag(_NamedList(["id", "title"], [1, "Integration"]))
+    bag = Bag().fillFrom(_NamedList(["id", "title"], [1, "Integration"]))
 
     assert bag.keys() == ["id", "title"]
     assert bag["id"] == 1
@@ -135,7 +135,7 @@ def test_list_subclass_with_items_uses_named_population():
 def test_plain_list_keeps_positional_population():
     bag = Bag(["first", "second"])
 
-    assert bag.keys() == ["0", "1"]
+    assert bag.keys() == ["r_00", "r_01"]
     assert bag.values() == ["first", "second"]
 
 
@@ -151,7 +151,7 @@ def test_malformed_mapping_like_source_is_atomic():
     bag = Bag({"original": 1})
 
     with pytest.raises(ValueError):
-        bag.fill_from(_MalformedNamedList())
+        bag.fillFrom(_MalformedNamedList())
 
     assert bag.keys() == ["original"]
     assert bag["original"] == 1

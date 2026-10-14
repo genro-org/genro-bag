@@ -57,7 +57,7 @@ def test_reset_invalidates_cache_without_loading():
 
 
 @pytest.mark.asyncio
-async def test_eager_refresh_is_inline_and_does_not_coalesce():
+async def test_explicit_reads_after_reset_do_not_emit_mutations():
     calls = []
     bag = Bag({"value": BagCbResolver(lambda: calls.append(1) or len(calls), cache_time=-1)})
     assert bag["value"] == 1
@@ -65,25 +65,28 @@ async def test_eager_refresh_is_inline_and_does_not_coalesce():
     bag.subscribe("watch", update=lambda **kw: events.append(kw))
     resolver = bag.get_resolver("value")
     for expected in (2, 3, 4):
-        resolver.reset(refresh=True)
+        resolver.reset()
+        assert bag["value"] == expected
         assert bag.get_item("value", static=True) == expected
         assert len(calls) == expected
-    assert len(events) == 3
+    assert events == []
 
 
-def test_eager_refresh_also_works_without_event_loop():
+def test_reset_and_explicit_read_work_without_event_loop():
     bag = Bag({"value": BagCbResolver(lambda: 42, read_only=False)})
-    bag.get_resolver("value").reset(refresh=True)
+    bag.get_resolver("value").reset()
+    assert bag["value"] == 42
     assert bag.get_item("value", static=True) == 42
 
 
 @pytest.mark.asyncio
-async def test_reactive_attribute_change_refreshes_before_return():
+async def test_attribute_change_reloads_on_next_read():
     bag = Bag({"value": BagCbResolver(lambda factor: factor * 2, factor=3,
-                                      reactive=True, cache_time=-1)})
+                                      cache_time=-1)})
     assert bag["value"] == 6
     bag.set_attr("value", factor=5)
-    assert bag.get_item("value", static=True) == 10
+    assert bag.get_item("value", static=True) == 6
+    assert bag["value"] == 10
 
 
 @pytest.mark.asyncio
@@ -99,8 +102,8 @@ async def test_async_callback_is_rejected_even_with_running_loop():
 
 @pytest.mark.asyncio
 async def test_interval_and_timer_subscription_are_rejected_in_running_loop():
-    with pytest.raises(ValueError):
+    with pytest.raises(TypeError):
         BagCbResolver(lambda: 1, interval=1)
     bag = Bag()
-    with pytest.raises(ValueError):
+    with pytest.raises(TypeError):
         bag.subscribe("timer", timer=lambda **kw: None, interval=1)

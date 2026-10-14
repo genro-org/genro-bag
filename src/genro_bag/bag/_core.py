@@ -68,7 +68,6 @@ class Bag(BagNamesMixin, BagPopulate, BagTraverse, BagEvents, BagRepr, BagParser
         _upd_subscribers: Callbacks for update events.
         _ins_subscribers: Callbacks for insert events.
         _del_subscribers: Callbacks for delete events.
-        _tmr_subscribers: Timer subscriptions (interval-based callbacks).
         _root_attributes: Attributes for the root bag.
         _node_class: Factory class for creating BagNode instances. Subclasses
             can override this to use custom node types. Internal infrastructure
@@ -88,12 +87,12 @@ class Bag(BagNamesMixin, BagPopulate, BagTraverse, BagEvents, BagRepr, BagParser
     _container_class: type[BagNodeContainer] = BagNodeContainer
     __tytx_suffix__ = "X"
 
-    def __init__(self, source: Any = None, **legacy_items: Any):
+    def __init__(self, source: dict[str, Any] | list | None = None, *, recursive: bool = True):
         """Create a new Bag.
 
         Args:
-            source: Optional supported source passed to ``fill_from``.
-            **legacy_items: Legacy ``Bag(key=value)`` item construction.
+            source: A dict, list, or None. Keys are literal string labels.
+            recursive: Convert nested dicts/lists to Bags; leaves remain shared.
 
         Example:
             >>> bag = Bag({'a': 1, 'b': 2})
@@ -107,20 +106,13 @@ class Bag(BagNamesMixin, BagPopulate, BagTraverse, BagEvents, BagRepr, BagParser
         self._upd_subscribers: dict = {}
         self._ins_subscribers: dict = {}
         self._del_subscribers: dict = {}
-        self._tmr_subscribers: dict = {}
         self._txn_subscribers: dict = {}
         self._root_attributes: dict | None = None
 
+        if not isinstance(recursive, bool):
+            raise TypeError("recursive must be a bool")
         if source is not None:
-            # Historical getGnrConfig passes this misspelled, unused option.
-            # With a source it is metadata, not an additional Bag item.
-            legacy_items.pop('_template_kargs', None)
-        if source is not None and legacy_items:
-            raise TypeError("Bag accepts either source or keyword items, not both")
-        if legacy_items:
-            source = legacy_items
-        if source:
-            self._load_source(source)
+            self.fill_from(source, recursive=recursive)
 
     # -------------------- transaction --------------------------------
 

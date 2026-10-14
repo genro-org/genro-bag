@@ -24,6 +24,8 @@ from xml.sax import saxutils
 import yaml
 
 import genro_bag
+from genro_bag._resolver_wire import encode_attrs, encode_resolver
+from replacement._legacy_json import LegacyJsonParser
 from genro_bag.bagnode import BagNodeContainer, smartsplit
 from genro_bag.resolver import BagResolver as _NewBagResolver
 from replacement.gnrbagxml import BagFromXml, BagToXml
@@ -58,6 +60,16 @@ class _CamelDeprecationMixin:
     2. _camel_to_snake(name) on the instance → deprecation warning + return
     3. AttributeError
     """
+
+    def __getattribute__(self, name: str) -> Any:
+        # Core now supplies camelCase aliases too. Route them through this
+        # adapter first so its legacy semantics and warnings remain effective.
+        if not name.startswith("_") and any(char.isupper() for char in name):
+            try:
+                return type(self).__getattr__(self, name)
+            except AttributeError:
+                pass
+        return object.__getattribute__(self, name)
 
     def __getattr__(self, name: str) -> Any:
         # Skip dunder and private attributes
@@ -556,7 +568,7 @@ def _as_dict_deeply(bag: Any, ascii: bool = False, lower: bool = False) -> dict[
 # Bag
 # ---------------------------------------------------------------------------
 
-class Bag(_CamelDeprecationMixin, genro_bag.Bag):
+class Bag(_CamelDeprecationMixin, LegacyJsonParser, genro_bag.Bag):
     """Bag wrapper with camelCase deprecation support.
 
     Uses __getattr__ mixin for camelCase → snake_case fallback.
@@ -644,7 +656,7 @@ class Bag(_CamelDeprecationMixin, genro_bag.Bag):
             result = self.__class__.from_xml(content)
             self._import_nodes_with_duplicates(result)
         else:
-            genro_bag.Bag.fill_from(self, filepath)
+            self._fill_from_bag(genro_bag.Bag.from_file(filepath), self)
 
     def _copy_nodes_from(self, result: Any) -> None:
         """Copy all nodes from result Bag into self, handling duplicates."""
@@ -721,7 +733,9 @@ class Bag(_CamelDeprecationMixin, genro_bag.Bag):
                 stacklevel=2,
             )
             static = "static" in _mode if isinstance(_mode, str) else bool(_mode)
-        return super().walk(callback=callback, static=static, **kwargs)
+        if callback is None:
+            return self._iter_nodes_with_paths(static=static)
+        return genro_bag.Bag.for_each(self, callback, static=static, deep=True, **kwargs)
 
     def subscribe(self, subscriber_id: Any = None, subscriberId: Any = None,
                   **kwargs: Any) -> None:
@@ -898,7 +912,8 @@ class Bag(_CamelDeprecationMixin, genro_bag.Bag):
     def wrp_getNode(self, path: Any = None, asTuple: bool = False,
                     autocreate: bool = False, default: Any = None) -> Any:
         """Get node at path with original parameter names."""
-        return self.get_node(path=path, as_tuple=asTuple, autocreate=autocreate, default=default)
+        node = self.get_node(path=path, autocreate=autocreate, default=default)
+        return (node.parent_bag, node) if asTuple and node is not None else node
 
     def wrp_popNode(self, path: str, _reason: Any = None) -> Any:
         """Remove and return BagNode at path."""
@@ -1237,7 +1252,9 @@ class Bag(_CamelDeprecationMixin, genro_bag.Bag):
     # --- XML serialization ---
 
     def _node_to_xml(self, node: Any, namespaces: list[str],
-                     self_closed_tags: list[str] | None = None) -> str:
+                     self_closed_tags: list[str] | None = None,
+                     sign_key: str | None = None, expires_in: int | None = None,
+                     pretty: bool = False, depth: int = 0) -> str:
         """Override to add _T type annotations matching the original format."""
         local_namespaces = self._extract_namespaces(node.attr)
         current_namespaces = namespaces + local_namespaces
@@ -1249,6 +1266,11 @@ class Bag(_CamelDeprecationMixin, genro_bag.Bag):
         if original_tag is not None:
             attrs_parts.append(f"_tag={saxutils.quoteattr(original_tag)}")
 
+        where = f"node {node.label!r}"
+        if node.resolver is not None:
+            payload = encode_resolver(node.resolver, sign_key, expires_in, where)
+            attrs_parts.append(f"_resolver={saxutils.quoteattr(payload)}")
+
         value = node.get_value(static=True)
 
         t_code = _type_code(value)
@@ -1258,7 +1280,7 @@ class Bag(_CamelDeprecationMixin, genro_bag.Bag):
             attrs_parts.append(f'_T="{t_code}"')
 
         if node.attr:
-            for k, v in node.attr.items():
+            for k, v in encode_attrs(node.attr, sign_key, expires_in, where).items():
                 if v is not None:
                     attr_type = _type_code(v)
                     if attr_type and attr_type not in ("T", ""):
@@ -1271,8 +1293,11 @@ class Bag(_CamelDeprecationMixin, genro_bag.Bag):
         attrs_str = " " + " ".join(attrs_parts) if attrs_parts else ""
 
         if hasattr(value, "_bag_to_xml"):
-            inner = value._bag_to_xml(current_namespaces, self_closed_tags)
+            pretty = pretty and node.attr.get("xml:space") != "preserve"
+            inner = value._bag_to_xml(current_namespaces, self_closed_tags, sign_key, expires_in, pretty, depth + 1)
             if inner:
+                if pretty:
+                    return f"<{tag}{attrs_str}>\n{inner}\n{'  ' * depth}</{tag}>"
                 return f"<{tag}{attrs_str}>{inner}</{tag}>"
             if self_closed_tags is None or tag in self_closed_tags:
                 return f"<{tag}{attrs_str}/>"

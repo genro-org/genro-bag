@@ -220,7 +220,7 @@ def test_legacy_json_has_historical_shape_and_populates_from_strings():
     target = Bag({"stale": True})
     loaded = Bag.from_json(wire, legacy_mode=True, catalog=CATALOG)
     assert isinstance(loaded, Bag)
-    assert target.fill_from(loaded) is target
+    assert target.replace(loaded) is target
     assert target["amount"] == Decimal("2.50")
     assert target["nested.flag"] is False
 
@@ -261,7 +261,7 @@ sys.meta_path.insert(0, BlockGnr())
 from genro_bag import Bag
 bag = Bag({'answer': 42})
 assert bag.to_xml() == '<answer>42</answer>'
-assert Bag.from_json(bag.to_json())['answer'] == 42
+assert Bag.from_tytx(bag.to_tytx())['answer'] == 42
 try:
     bag.to_xml(legacy_mode=True)
 except ImportError as exc:

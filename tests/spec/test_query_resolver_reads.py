@@ -51,7 +51,7 @@ def test_metadata_static_and_limited_queries_do_not_resolve_unneeded_values():
 
     def load():
         calls.append('load')
-        return Bag(leaf=1)
+        return Bag({'leaf': 1})
 
     bag = Bag()
     bag.set_item('branch', resolver(load), _attributes={'caption': 'Branch'})

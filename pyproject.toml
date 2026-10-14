@@ -81,7 +81,7 @@ include = ["/src", "/tests", "/docs", "/README.md", "/LICENSE", "/pyproject.toml
 packages = ["src/genro_bag"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests/spec", "tests/test_typed_branches.py"]
+testpaths = ["tests"]
 addopts = "-v --cov=genro_bag --cov-report=term-missing --cov-report=html --cov-report=xml"
 
 [tool.black]

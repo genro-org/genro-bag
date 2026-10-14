@@ -293,7 +293,7 @@ class BagSerializer:
                 automatically based on transport (.bag.json, .bag.mp).
                 If None, returns the serialized data.
             compact: Serialization mode:
-                - False (default): Parent paths as full strings ('a.b.c').
+                - False (default): Parent paths as arrays of literal label segments.
                 - True: Parent paths as numeric codes (0, 1, 2...).
             sign_key: Secret key. When given, resolver payloads are signed —
                 use it whenever the data may come back from an untrusted party.

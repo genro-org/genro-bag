@@ -60,7 +60,7 @@ class TestPlainBagsUnchanged:
 @pytest.mark.usefixtures("subtypes")
 class TestRoot:
     def test_root_name_at_payload_level(self):
-        decoded = from_tytx(Source().to_tytx())
+        decoded = from_tytx(Source().to_tytx().removesuffix("::X"))
         assert decoded["__cls"] == "Source"
 
     @pytest.mark.parametrize("caller", [Bag, Source, Page])
@@ -72,8 +72,13 @@ class TestRoot:
         assert type(caller.from_tytx(Bag({"a": 1}).to_tytx())) is Bag
 
     @pytest.mark.parametrize("caller", [Bag, Source])
-    def test_empty_payload_is_a_bag(self, caller):
-        assert type(caller.from_tytx("")) is Bag
+    def test_empty_marked_bag_is_a_bag(self, caller):
+        assert type(caller.from_tytx(Bag().to_tytx())) is Bag
+
+    @pytest.mark.parametrize("caller", [Bag, Source])
+    def test_empty_untyped_scalar_is_rejected(self, caller):
+        with pytest.raises(TypeError, match="root"):
+            caller.from_tytx("")
 
     def test_node_class_follows_the_bag(self):
         result = roundtrip(Source({"a": 1}))
@@ -110,7 +115,7 @@ class TestBranches:
 
     def test_name_written_only_when_class_changes(self):
         tree = Source({"same": Source(), "data": Bag({"page": Page()})})
-        rows = {row[1]: row[4] for row in from_tytx(tree.to_tytx())["rows"]}
+        rows = {row[1]: row[4] for row in from_tytx(tree.to_tytx().removesuffix("::X"))["rows"]}
         assert "__cls" not in rows["same"]
         assert rows["data"]["__cls"] == "Bag"
         assert rows["page"]["__cls"] == "Page"
@@ -144,12 +149,12 @@ class TestErrors:
             Source().to_tytx()
 
     def test_unknown_branch_name(self):
-        payload = to_tytx({"rows": [["", "a", None, "::X", {"__cls": "Missing"}]]})
+        payload = to_tytx({"rows": [["", "a", None, "::X", {"__cls": "Missing"}]]}) + "::X"
         with pytest.raises(BagSerializationError, match="Missing"):
             Bag.from_tytx(payload)
 
     def test_unknown_root_name(self):
-        payload = to_tytx({"rows": [], "__cls": "Missing"})
+        payload = to_tytx({"rows": [], "__cls": "Missing"}) + "::X"
         with pytest.raises(BagSerializationError, match="Missing"):
             Bag.from_tytx(payload)
 
@@ -160,6 +165,6 @@ class TestErrors:
             bag.to_tytx()
 
     def test_reserved_attribute_on_a_leaf_row(self):
-        payload = to_tytx({"rows": [["", "a", None, 1, {"__cls": "Source"}]]})
+        payload = to_tytx({"rows": [["", "a", None, 1, {"__cls": "Source"}]]}) + "::X"
         with pytest.raises(BagSerializationError, match="reserved"):
             Bag.from_tytx(payload)

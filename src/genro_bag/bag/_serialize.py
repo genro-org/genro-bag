@@ -21,7 +21,6 @@ from genro_bag._subtype_wire import CLS_ATTRIBUTE, get_cls_marker, get_inherited
 from genro_bag.bag._exceptions import BagSerializationError
 
 if TYPE_CHECKING:
-    from genro_bag.bag._core import Bag
     from genro_bag.bagnode import BagNode
 
 # Regex for sanitizing XML tag names
@@ -294,7 +293,7 @@ class BagSerializer:
                 automatically based on transport (.bag.json, .bag.mp).
                 If None, returns the serialized data.
             compact: Serialization mode:
-                - False (default): Parent paths as full strings ('a.b.c').
+                - False (default): Parent paths as arrays of literal label segments.
                 - True: Parent paths as numeric codes (0, 1, 2...).
             sign_key: Secret key. When given, resolver payloads are signed —
                 use it whenever the data may come back from an untrusted party.
@@ -311,53 +310,63 @@ class BagSerializer:
                 value (node value or attribute) carries a resolver — that
                 path goes through the type registry and cannot be signed.
         """
-        if compact:
-            paths: dict[int, str] = {}
-            rows = list(
-                self._node_flattener(
-                    path_registry=paths, sign_key=sign_key, expires_in=expires_in
-                )
-            )
-            paths_str = {str(k): v for k, v in paths.items()}
-            data = {"rows": rows, "paths": paths_str}
+        payload = self._to_tytx_payload(compact, sign_key, expires_in)
+        suffix = type(self).__tytx_suffix__
+        if transport == "json":
+            result = f"{payload}::{suffix}"
+        elif transport == "msgpack":
+            import msgpack
+            result = msgpack.packb(msgpack.ExtType(4, f"{suffix}:{payload}".encode()))
         else:
-            rows = list(self._node_flattener(sign_key=sign_key, expires_in=expires_in))
-            data = {"rows": rows}
-        root_class = type(self)
-        root_cls = get_cls_marker(root_class, get_inherited_class(None, root_class.__tytx_suffix__))
-        if root_cls is not None:
-            data[CLS_ATTRIBUTE] = root_cls
-
-        # genro_tytx uses transport=None for JSON
-        tytx_transport = None if transport == "json" else transport
-        result = tytx_encode(data, transport=tytx_transport)
-
+            raise ValueError(f"Unsupported transport: {transport}")
         if filename:
-            ext_map = {"json": ".bag.json", "msgpack": ".bag.mp"}
-            ext = ext_map[transport]
+            ext = ".bag.json" if transport == "json" else ".bag.mp"
+            filename = str(filename)
             if not filename.endswith(ext):
-                filename = filename + ext
-
-            # Remove ::JS suffix for file (extension identifies format)
-            if isinstance(result, str) and result.endswith("::JS"):
-                result = result[:-4]
-
-            mode = "wb" if transport == "msgpack" else "w"
-            with open(filename, mode) as f:
-                f.write(result)
+                filename += ext
+            with open(filename, "wb" if isinstance(result, bytes) else "w") as stream:
+                stream.write(result)
             return None
-
         return result
+
+
+    def _to_tytx_payload(self, compact=False, sign_key=None, expires_in=None) -> str:
+        """Registry hook: Bag rows without the outer type marker."""
+        paths = {} if compact else None
+        rows = [
+            (self._wire_value(parent), self._wire_value(label), self._wire_value(tag), value, attr)
+            for parent, label, tag, value, attr in self._node_flattener(paths, sign_key, expires_in)
+        ]
+        data = {"rows": rows}
+        if paths is not None:
+            data["paths"] = {str(k): self._wire_value(v) for k, v in paths.items()}
+        root_class = type(self)
+        marker = get_cls_marker(root_class, get_inherited_class(None, root_class.__tytx_suffix__))
+        if marker is not None:
+            data[CLS_ATTRIBUTE] = marker
+        return tytx_encode(data)
+
+
+    @staticmethod
+    def _wire_value(value):
+        """Quote literal suffix-like strings before the TYTX JSON hydration pass."""
+        if isinstance(value, str):
+            return value + "::T" if "::" in value else value
+        if isinstance(value, dict):
+            return {k: BagSerializer._wire_value(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [BagSerializer._wire_value(v) for v in value]
+        return value
 
     def _node_flattener(
         self,
-        path_registry: dict[int, str] | None = None,
+        path_registry: dict[int, list[str]] | None = None,
         sign_key: str | None = None,
         expires_in: int | None = None,
-    ) -> Iterator[tuple[str | int | None, str, str | None, Any, dict]]:
+    ) -> Iterator[tuple[list[str] | int | None, str, str | None, Any, dict]]:
         """Expand each node into (parent, label, tag, value, attr) tuples.
 
-        Consumes a private streaming path iterator and transforms each node into a flat tuple suitable
+        Traverses static structural nodes and emits a flat tuple suitable
         for TYTX serialization. Values are Python raw types - TYTX encoding
         is done later by the serializer.
 
@@ -368,7 +377,7 @@ class BagSerializer:
 
         Args:
             path_registry: Optional dict to enable compact mode.
-                - If None: parent is path string (normal mode)
+                - If None: parent is a label-segment list (normal mode)
                 - If dict: parent is numeric code, dict populated with
                   {code: full_path} mappings for branches
             sign_key: Secret key for signing resolver payloads.
@@ -376,7 +385,7 @@ class BagSerializer:
 
         Yields:
             tuple: (parent, label, tag, value, attr) where:
-                - parent: path string or int code (None for root-level)
+                - parent: label-segment list or int code (None for root-level)
                 - label: node's label
                 - tag: node's tag or None
                 - value: "::<suffix>" for Bag branches, "::NN" for None, "::RSLV:..." for a
@@ -385,16 +394,20 @@ class BagSerializer:
         """
         compact = path_registry is not None
         if compact:
-            path_to_code: dict[str, int] = {}
+            path_to_code: dict[tuple[str, ...], int] = {}
             code_counter = 0
 
-        # Class of each branch by path: a node's parent class decides whether
-        # its branch needs __cls. Read from the walk, since parent_bag is
-        # None when the backref is off.
-        path_to_class: dict[str, type[Bag]] = {"": type(self)}
+        def nodes(bag, prefix=()):
+            for node in bag:
+                path = (*prefix, node.label)
+                yield path, node
+                value = node.static_value
+                if node.resolver is None and hasattr(value, "_nodes"):
+                    yield from nodes(value, path)
 
-        for path, node in self._iter_nodes_with_paths():
-            parent_path = path.rsplit(".", 1)[0] if "." in path else ""
+        path_to_class = {(): type(self)}
+        for path, node in nodes(self):
+            parent_path = path[:-1]
             where = f"node {path!r}"
 
             # Use static=True to avoid triggering resolvers during serialization
@@ -410,10 +423,8 @@ class BagSerializer:
                 value = f"::{type(node_value).__tytx_suffix__}"
                 branch_class = type(node_value)
                 path_to_class[path] = branch_class
-                branch_cls = get_cls_marker(
-                    branch_class,
-                    get_inherited_class(path_to_class[parent_path], branch_class.__tytx_suffix__),
-                )
+                branch_cls = get_cls_marker(branch_class,
+                    get_inherited_class(path_to_class[parent_path], branch_class.__tytx_suffix__))
             elif node_value is None:
                 value = "::NN"
             else:
@@ -426,13 +437,11 @@ class BagSerializer:
                         "carries a resolver, which cannot be signed on this "
                         "path — move it to a Bag-valued node or drop sign_key"
                     )
-                value = node_value
+                value = self._wire_value(node_value)
 
             if CLS_ATTRIBUTE in node.attr:
-                raise BagSerializationError(
-                    f"{where}: the attribute {CLS_ATTRIBUTE!r} is reserved for the Bag class name"
-                )
-            attr = encode_attrs(node.attr, sign_key, expires_in, where)
+                raise BagSerializationError(f"{where}: {CLS_ATTRIBUTE!r} is reserved for the Bag class name")
+            attr = encode_attrs(self._wire_value(node.attr), sign_key, expires_in, where)
             if branch_cls is not None:
                 attr[CLS_ATTRIBUTE] = branch_cls
 
@@ -443,10 +452,10 @@ class BagSerializer:
                 if hasattr(node_value, "traverse") and hasattr(node_value, "_nodes"):
                     path_to_code[path] = code_counter
                     assert path_registry is not None
-                    path_registry[code_counter] = path
+                    path_registry[code_counter] = list(path)
                     code_counter += 1
             else:
-                yield (parent_path, node.label, node.node_tag, value, attr)
+                yield (list(parent_path), node.label, node.node_tag, value, attr)
 
     # ==================== to_json ====================
 

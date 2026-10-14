@@ -14,7 +14,7 @@ class _BranchResolver(BagResolver):
 
     def load(self):
         self._calls.append("load")
-        return Bag(leaf=1)
+        return Bag({'leaf': 1})
 
 
 def test_for_each_static_controls_resolver_traversal():
@@ -58,8 +58,8 @@ def test_digest_and_columns_accept_legacy_keyword_spellings():
 
 
 def test_update_verified_legacy_named_flags_remain_supported():
-    target = Bag(value=1)
-    source = Bag(value=None, added=2)
+    target = Bag({'value': 1})
+    source = Bag({'value': None, 'added': 2})
 
     target.update(source, resolved=True, ignoreNone=True)
 

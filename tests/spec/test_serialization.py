@@ -39,8 +39,15 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from contrib.genropy_wrapper.replacement._legacy_json import LegacyJsonParser
 
 from genro_bag import Bag
+
+
+class LegacyJsonBag(LegacyJsonParser, Bag):
+    """Exercise the legacy node decoder explicitly, never the public alias."""
+
+
 
 # =============================================================================
 # 1. to_xml / from_xml - simple roundtrip
@@ -162,7 +169,7 @@ class TestToXmlFile:
         src = Bag({"x": "world"})
         file = tmp_path / "out.xml"
         src.to_xml(filename=str(file))
-        restored = Bag().fill_from(str(file))
+        restored = Bag.from_file(str(file))
         assert restored.get_item("x") == "world"
 
 
@@ -415,7 +422,7 @@ class TestJsonRoundtrip:
         src.set_item("a", 42, _attributes={"type": "int"})
         src.set_item("b", "hello")
         data = src.to_json(typed=True)
-        restored = Bag.from_json(data)
+        restored = LegacyJsonBag.from_json(data)
         assert restored.get_item("a") == 42
         assert restored.get_attr("a", "type") == "int"
         assert restored.get_item("b") == "hello"
@@ -424,7 +431,7 @@ class TestJsonRoundtrip:
         """to_json(typed=False) produce JSON standard rileggibile."""
         src = Bag({"a": 1, "b": 2})
         data = src.to_json(typed=False)
-        restored = Bag.from_json(data)
+        restored = LegacyJsonBag.from_json(data)
         assert restored.get_item("a") == 1
         assert restored.get_item("b") == 2
 
@@ -433,7 +440,7 @@ class TestJsonRoundtrip:
         src = Bag()
         src["outer.inner"] = "v"
         data = src.to_json(typed=True)
-        restored = Bag.from_json(data)
+        restored = LegacyJsonBag.from_json(data)
         assert restored.get_item("outer.inner") == "v"
 
 
@@ -447,7 +454,7 @@ class TestJsonTyped:
         """typed=True preserva Decimal attraverso JSON."""
         src = Bag({"price": Decimal("19.99")})
         data = src.to_json(typed=True)
-        restored = Bag.from_json(data)
+        restored = LegacyJsonBag.from_json(data)
         value = restored.get_item("price")
         assert value == Decimal("19.99")
         assert isinstance(value, Decimal)
@@ -461,13 +468,13 @@ class TestJsonTyped:
 class TestFromJsonNonString:
     def test_from_json_dict_input(self):
         """from_json accetta direttamente un dict Python."""
-        bag = Bag.from_json({"a": 1, "b": 2})
+        bag = LegacyJsonBag.from_json({"a": 1, "b": 2})
         assert bag.get_item("a") == 1
         assert bag.get_item("b") == 2
 
     def test_from_json_scalar_wrapped_in_value(self):
         """from_json(scalare) wrappa in {'value': scalare}."""
-        bag = Bag.from_json(42)  # type: ignore[arg-type]
+        bag = LegacyJsonBag.from_json(42)  # type: ignore[arg-type]
         assert bag.get_item("value") == 42
 
 
@@ -559,7 +566,7 @@ class TestJsonWithResolver:
         bag = Bag()
         bag["id"] = UuidResolver("uuid4")
         data = bag.to_json(typed=True)
-        restored = Bag.from_json(data)
+        restored = LegacyJsonBag.from_json(data)
         resolver = restored.get_resolver("id")
         assert isinstance(resolver, UuidResolver)
 
@@ -586,12 +593,12 @@ class TestJsonWithNodeTag:
 class TestJsonEmpty:
     def test_empty_json_list_produces_empty_bag(self):
         """from_json('[]') produce un Bag vuoto."""
-        bag = Bag.from_json("[]")
+        bag = LegacyJsonBag.from_json("[]")
         assert len(bag) == 0
 
     def test_empty_json_dict_produces_empty_bag(self):
         """from_json('{}') produce un Bag vuoto."""
-        bag = Bag.from_json("{}")
+        bag = LegacyJsonBag.from_json("{}")
         assert len(bag) == 0
 
 
@@ -620,5 +627,5 @@ class TestXmlMixedContent:
 class TestFromJsonListJoiner:
     def test_string_list_with_joiner(self):
         """from_json con list_joiner concatena liste di stringhe."""
-        bag = Bag.from_json({"items": ["a", "b", "c"]}, list_joiner=",")
+        bag = LegacyJsonBag.from_json({"items": ["a", "b", "c"]}, list_joiner=",")
         assert bag.get_item("items") == "a,b,c"

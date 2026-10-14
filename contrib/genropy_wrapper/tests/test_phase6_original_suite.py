@@ -8,7 +8,7 @@ Original source: gnrpy/tests/core/gnrbag_test.py
 Changes from original:
     - Imports from replacement.gnrbag instead of gnr.core.gnrbag
     - BAG_DATA points to local tests/data/testbag.xml
-    - test_fillFromUrl marked xfail (network dependency)
+    - test_fillFromUrl uses a local HTTP server
     - test_BagNodeInternals split: validators in separate xfailed test
     - Duplicate test_iterators resolved (kept only substantive version)
     - test_load changed from print() to assert
@@ -18,14 +18,44 @@ import datetime
 import os
 import re
 import socket
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
-
 import replacement.gnrbag as bm
 from replacement.gnrbag import Bag, BagNode, BagResolver
 
-
 BAG_DATA = os.path.join(os.path.dirname(__file__), "data/testbag.xml")
+
+
+@pytest.fixture
+def rss_server():
+    """Serve a controlled RSS document without external network dependencies."""
+    requests = []
+    payload = b'<rss><channel><title>Genropy</title></channel></rss>'
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/rss+xml")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, format, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever,
+                              kwargs={"poll_interval": 0.01}, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/feed/", requests
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 class TestBasicBag:
@@ -52,10 +82,12 @@ class TestBasicBag:
 
         assert b == self.mybag
 
-    def test_fillFromUrl(self):
-        """Load Bag from a remote URL (RSS feed)."""
-        b = Bag("https://www.genropy.org/feed/")
+    def test_fillFromUrl(self, rss_server):
+        """The legacy constructor downloads and parses an RSS document."""
+        url, requests = rss_server
+        b = Bag(url)
         assert b["rss.channel.title"] == "Genropy"
+        assert requests == ["/feed/"]
 
     def test_fillFromXml(self):
         """Create Bag from an XML string."""
@@ -413,12 +445,27 @@ class TestBagResolver:
         cls.mybag = Bag(BAG_DATA)
         cls.mybag["connection.info"] = MyResolver()
 
-    def test_load(self):
-        """Custom resolver loads system info on access.
+    @pytest.mark.parametrize("dns_available", [True, False], ids=["dns_ok", "dns_failure"])
+    def test_load(self, monkeypatch, dns_available):
+        """Resolve system info and its fallback independently of host DNS."""
+        lookups = []
+        monkeypatch.setattr(socket, "gethostname", lambda: "test-host")
 
-        Original used print() instead of assert — fixed here.
-        """
-        assert self.mybag["connection.info.hostname"] == socket.gethostname()
+        def lookup(hostname):
+            lookups.append(hostname)
+            if not dns_available:
+                raise socket.gaierror("controlled DNS failure")
+            return "192.0.2.10"
+
+        monkeypatch.setattr(socket, "gethostbyname", lookup)
+        bag = Bag()
+        bag["connection.info"] = MyResolver()
+        assert lookups == []  # Attaching the resolver is lazy.
+        info = bag["connection.info"]
+        assert lookups == ["test-host"]
+        assert info["hostname"] == ("test-host" if dns_available else "localhost")
+        assert info["ip"] == ("192.0.2.10" if dns_available else "unknown")
+        assert info["pid"] == os.getpid()
 
 
 class TestBagFormula:

@@ -75,9 +75,8 @@ bag.pop('count')    # Returns value and removes
 xml = bag.to_xml(pretty=True)
 bag2 = Bag.from_xml(xml_string)
 
-# JSON
-json_str = bag.to_json()
-bag2 = Bag.from_json(json_string)
+# Ordinary JSON data
+bag2 = Bag.from_tytx('{"name": "Ada"}')
 
 # TYTX (preserves Python types)
 tytx = bag.to_tytx()

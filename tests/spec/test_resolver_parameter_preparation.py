@@ -53,10 +53,11 @@ def test_cached_reads_and_reset():
     assert resolver.preparations == 2
 
 
-def test_refresh_also_prepares_parameters():
+def test_explicit_read_after_reset_prepares_parameters():
     resolver = Prepared(3, read_only=False)
     node = Bag().set_item('result', resolver)
-    resolver.reset(refresh=True)
+    resolver.reset()
+    resolver()
     assert node.static_value == (6, {})
     assert resolver.preparations == 1
     assert resolver.value == 3

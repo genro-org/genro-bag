@@ -32,7 +32,7 @@ def test_static_dynamic_kwargs_and_callback_errors():
     class Resolver(BagResolver):
         def load(self):
             calls.append('load')
-            return Bag(leaf=1)
+            return Bag({'leaf': 1})
 
     bag = Bag()
     bag.set_item('remote', Resolver())

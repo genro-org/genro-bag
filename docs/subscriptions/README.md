@@ -85,7 +85,7 @@ def callback(**kw):
 
 ## Stop Propagation
 
-Any callback (ins/upd/del/tmr) can return `False` to stop propagation to parent bags:
+Any callback (ins/upd/del) can return `False` to stop propagation to parent bags:
 
 ```python
 def handle_locally(**kw):

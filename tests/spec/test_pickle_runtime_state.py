@@ -19,8 +19,8 @@ class RuntimeBag(Bag):
 def test_pickle_excludes_transient_subscribers_without_mutating_live_graph():
     events = []
     node_events = []
-    nested = RuntimeBag(leaf=1)
-    source = RuntimeBag(root=nested)
+    nested = RuntimeBag({'leaf': 1})
+    source = RuntimeBag({'root': nested})
     source.set_backref()
     root_node = source.get_node("root")
     leaf_node = nested.get_node("leaf")
@@ -29,13 +29,6 @@ def test_pickle_excludes_transient_subscribers_without_mutating_live_graph():
     source.subscribe("transaction", transaction=lambda **event: None)
     nested.subscribe("nested", any=lambda **event: None)
     leaf_node.subscribe("node", lambda **event: node_events.append(event["evt"]))
-    timer_entry = {
-        "timer_id": "not-a-live-timer",
-        "callback": lambda **event: None,
-        "interval": 1,
-    }
-    source._tmr_subscribers["timer"] = timer_entry
-
     payload = pickle.dumps(source)
 
     assert source.backref is True
@@ -48,7 +41,6 @@ def test_pickle_excludes_transient_subscribers_without_mutating_live_graph():
     assert set(source._ins_subscribers) == {"local"}
     assert set(source._del_subscribers) == {"local"}
     assert set(source._txn_subscribers) == {"transaction"}
-    assert source._tmr_subscribers["timer"] is timer_entry
     assert set(nested._upd_subscribers) == {"nested"}
     assert set(leaf_node._node_subscribers) == {"node"}
 
@@ -74,14 +66,13 @@ def test_pickle_excludes_transient_subscribers_without_mutating_live_graph():
     assert restored._upd_subscribers == {}
     assert restored._ins_subscribers == {}
     assert restored._del_subscribers == {}
-    assert restored._tmr_subscribers == {}
     assert restored._txn_subscribers == {}
     assert restored_nested._upd_subscribers == {}
     assert restored_leaf_node._node_subscribers == {}
 
 
 def test_repeated_pickle_does_not_change_unsubscribed_tree_state():
-    source = RuntimeBag(root=RuntimeBag(leaf=1))
+    source = RuntimeBag({'root': RuntimeBag({'leaf': 1})})
     source.set_backref()
     nested = source.get_item("root")
     root_node = source.get_node("root")
@@ -97,7 +88,7 @@ def test_repeated_pickle_does_not_change_unsubscribed_tree_state():
 
 
 def test_pickling_nested_bag_does_not_capture_its_external_parent_graph():
-    parent = RuntimeBag(child=RuntimeBag(leaf=1))
+    parent = RuntimeBag({'child': RuntimeBag({'leaf': 1})})
     parent.set_backref()
     nested = parent.get_item("child")
     parent.subscribe("local", any=lambda **event: None)

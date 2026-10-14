@@ -501,12 +501,12 @@ class TestConstructionErrors:
 
     def test_read_only_with_interval_rejected(self):
         """read_only=True + interval raises ValueError."""
-        with pytest.raises(ValueError):
+        with pytest.raises(TypeError):
             BagCbResolver(lambda: 1, read_only=True, interval=5)
 
     def test_read_only_with_reactive_rejected(self):
         """read_only=True + reactive=True raises ValueError."""
-        with pytest.raises(ValueError):
+        with pytest.raises(TypeError):
             BagCbResolver(lambda: 1, read_only=True, reactive=True)
 
 
@@ -599,29 +599,8 @@ class TestResolverInPlaceProperties:
         assert resolver is not None
         assert resolver.cache_time == -1
 
-    def test_interval_default_none(self):
-        """A resolver without an interval has interval=None."""
-        bag = Bag()
-        bag["c"] = BagCbResolver(lambda: 1, cache_time=-1)
-        resolver = bag.get_resolver("c")
-        assert resolver is not None
-        assert resolver.interval is None
 
-    def test_reactive_default_false(self):
-        """reactive default is False."""
-        bag = Bag()
-        bag["c"] = BagCbResolver(lambda: 1)
-        resolver = bag.get_resolver("c")
-        assert resolver is not None
-        assert resolver.reactive is False
 
-    def test_reactive_true_when_set(self):
-        """reactive=True at construct is exposed by the property."""
-        bag = Bag()
-        bag["c"] = BagCbResolver(lambda: 1, cache_time=-1, reactive=True)
-        resolver = bag.get_resolver("c")
-        assert resolver is not None
-        assert resolver.reactive is True
 
     def test_reactive_setter_mutates(self):
         """reactive setter allows modifying the flag at runtime."""

@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "genro-bag"
-version = "0.27.0"
+version = "0.28.0"
 description = "Modernized bag system for the Genropy framework - hierarchical data container with XML serialization"
 readme = "README.md"
 license = "Apache-2.0"
@@ -34,9 +34,9 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "genro-toolbox>=0.14.0",
-    "genro-tytx>=0.16.0",
-    "httpx>=0.27.0",
+    "genro-toolbox>=0.18.0",
+    "genro-tytx>=0.16.2",
+    "httpx>=0.28.0",
 ]
 
 [project.optional-dependencies]
@@ -81,7 +81,7 @@ include = ["/src", "/tests", "/docs", "/README.md", "/LICENSE", "/pyproject.toml
 packages = ["src/genro_bag"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests/spec", "tests/test_typed_branches.py"]
+testpaths = ["tests"]
 addopts = "-v --cov=genro_bag --cov-report=term-missing --cov-report=html --cov-report=xml"
 
 [tool.black]

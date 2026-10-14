@@ -320,21 +320,10 @@ class BagNamesMixin:
                 result.append(formatted)
         return joiner.join(result)
 
-    def fill_from(self, source=None, transport=None):
-        """Deprecated compatibility entry point for mixed source types."""
-        warnings.warn(
-            "Bag.fill_from is deprecated; decode the source and use replace(Bag)",
-            DeprecationWarning, stacklevel=2,
-        )
-        if source is None:
-            return self
-        prepared = self.__class__()
-        self._populate_into(prepared, source, transport=transport)
-        return self.replace(prepared)
-
     def fillFrom(self, source=None, **kwargs):
-        """Deprecated camel-case alias."""
-        return self.fill_from(source, **kwargs)
+        """Legacy source loader; modern fill_from accepts native containers only."""
+        warnings.warn("Bag.fillFrom is deprecated; use explicit readers or fill_from", DeprecationWarning, stacklevel=2)
+        return self._load_source(source, **kwargs)
 
     def toXml(
         self, filename=None, encoding="UTF-8", typeattrs=True,
@@ -599,8 +588,6 @@ class BagNamesMixin:
         any=None,
         *,
         subscriber_id=None,
-        timer=None,
-        interval=None,
         transaction=None,
     ):
         """Semantic and functional adapter: accept both subscriber id spellings."""
@@ -612,8 +599,6 @@ class BagNamesMixin:
             insert=insert,
             delete=delete,
             any=any,
-            timer=timer,
-            interval=interval,
             transaction=transaction,
         )
 
@@ -626,7 +611,6 @@ class BagNamesMixin:
         any=False,
         *,
         subscriber_id=None,
-        timer=False,
         transaction=False,
     ):
         """Semantic and functional adapter: accept both subscriber id spellings."""
@@ -638,7 +622,6 @@ class BagNamesMixin:
             insert=insert,
             delete=delete,
             any=any,
-            timer=timer,
             transaction=transaction,
         )
 

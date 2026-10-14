@@ -16,9 +16,7 @@ Caching Semantics:
     - cache_time > 0      -> passive cache for N seconds (TTL, reload on next access)
     - cache_time < 0  -> INFINITE cache (until manual reset())
 
-Synchronous active triggers:
-    - reactive = True     -> auto-refresh when a non-internal param changes
-    - reset(refresh=True) -> explicit eager refresh + notify subscribers
+Resolvers load synchronously on explicit reads. Scheduling belongs to the application.
 
 Retry Policy:
     - retry_policy = None -> NO retry (default)
@@ -118,18 +116,10 @@ class BagResolver(BagResolverNamesMixin):
         - read_only=False (default): Result is stored in node._value when
           attached, or inside the resolver when standalone.
 
-    Reactive Mode:
-        - reactive=True: When a non-internal param changes via set_attr, the
-          resolver refreshes immediately on the caller thread and emits an update
-          event. Enables synchronous dataflow cascades.
-        - Incompatible with read_only.
-
     Class Attributes:
         class_kwargs: dict of {param_name: default_value}
             Parameters with defaults, passable as keyword args.
             - 'cache_time': 0 = no cache, >0 = passive TTL, <0 = infinite
-            - 'interval': only None is supported; scheduling belongs outside the Bag
-            - 'reactive': False = lazy, True = push-refresh on param change
             - 'read_only': if True, value is NOT saved in node._value
             - 'retry_policy': retry config or preset name ('network', 'aggressive')
 
@@ -137,9 +127,9 @@ class BagResolver(BagResolverNamesMixin):
             Required parameters, passable as positional args.
 
         internal_params: set of parameter names that are internal
-            These parameters (cache_time, interval, reactive, read_only,
+            These parameters (cache_time, read_only,
             retry_policy, as_bag) are NOT read from node.attr during merging
-            and do NOT trigger reactive refresh. They control resolver
+            and do NOT invalidate the cache. They control resolver
             behavior, not computation.
 
     Example:
@@ -162,15 +152,13 @@ class BagResolver(BagResolverNamesMixin):
 
     class_kwargs: dict[str, Any] = {
         "cache_time": 0,
-        "interval": None,
-        "reactive": False,
         "read_only": None,  # Unspecified: retain the automatic no-cache getter policy.
         "retry_policy": None,
         "as_bag": None,
     }
     class_args: list[str] = []
     internal_params: set[str] = {
-        "cache_time", "interval", "reactive", "read_only", "retry_policy", "as_bag",
+        "cache_time", "read_only", "retry_policy", "as_bag",
     }
 
     __slots__ = (
@@ -182,7 +170,6 @@ class BagResolver(BagResolverNamesMixin):
         "_parent_node",  # BagNode | None: bidirectional link to parent
         "_cache_last_update",  # datetime | None: last load() timestamp
         "_cached_value",  # Any: cached result when standalone (no parent node)
-        "_refresh_running",  # bool: a refresh is currently executing
     )
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -210,8 +197,6 @@ class BagResolver(BagResolverNamesMixin):
         self._cache_last_update: datetime | None = None
         self._cached_value: Any = None
 
-        # Prevent recursive synchronous refresh.
-        self._refresh_running: bool = False
 
         # Build _kw dict from class_args and class_kwargs
         self._kw: dict[str, Any] = {}
@@ -237,20 +222,13 @@ class BagResolver(BagResolverNamesMixin):
         if isinstance(ct, bool):
             raise TypeError("cache_time must be numeric; use a negative value for infinite caching")
 
-        if self._kw.get("interval") is not None:
-            raise ValueError("interval is not supported; schedule refresh outside the Bag")
+        removed = {"interval", "reactive"}.intersection(self._kw)
+        if removed:
+            raise TypeError(f"Removed resolver options: {', '.join(sorted(removed))}. Schedule updates outside Bag.")
         if inspect.iscoroutinefunction(self.load) or (
             type(self).load is BagResolver.load and hasattr(type(self), "async_load")
         ):
             raise TypeError("BagResolver requires synchronous load(); async_load() is not supported")
-
-        if self._kw.get("reactive") and self._kw.get("read_only") is True:
-            raise ValueError(
-                "read_only=True is incompatible with reactive=True: the "
-                "reactive refresh writes the value to the node for subscribers "
-                "to observe, but read_only prevents that write. Use read_only=False "
-                "or drop reactive."
-            )
 
         # Hook for subclasses
         self.init()
@@ -282,11 +260,7 @@ class BagResolver(BagResolverNamesMixin):
             return
         if not self.read_only and self._cache_last_update is not None:
             self.reset()
-        if previous_parent is not None and parent_node is None:
-            self._stop_interval()
         self._parent_node = parent_node
-        if parent_node is not None:
-            self._start_interval()
 
     # =========================================================================
     # CACHE TIME PROPERTY
@@ -310,17 +284,7 @@ class BagResolver(BagResolverNamesMixin):
     # INTERVAL PROPERTY (mutable: assignment reconfigures the timer)
     # =========================================================================
 
-    @property
-    def interval(self) -> int | float | None:
-        """Compatibility setting; only None is supported."""
-        return self._kw.get("interval")
 
-    @interval.setter
-    def interval(self, value: int | float | None) -> None:
-        """Reject automatic scheduling."""
-        if value is not None:
-            raise ValueError("interval is not supported; schedule refresh outside the Bag")
-        self._kw["interval"] = None
 
     def _parameter_values(self) -> dict[str, Any]:
         """Read current execution parameters, or persistent state outside load."""
@@ -362,29 +326,7 @@ class BagResolver(BagResolverNamesMixin):
     # REACTIVE PROPERTY (mutable)
     # =========================================================================
 
-    @property
-    def reactive(self) -> bool:
-        """Whether the resolver auto-refreshes on parameter change.
 
-        When True, any set_attr on the parent node that changes a domain
-        parameter (non-internal) triggers reset(refresh=True) instead of the
-        default lazy reset(). Refreshes execute immediately on the caller thread.
-        """
-        return bool(self._kw.get("reactive"))
-
-    @reactive.setter
-    def reactive(self, value: bool) -> None:
-        """Toggle reactive behavior after construction.
-
-        Rejects the read_only + reactive combination as at construction.
-        """
-        if value and self._kw.get("read_only") is True:
-            raise ValueError(
-                "read_only=True is incompatible with reactive=True: the "
-                "reactive refresh writes the value to the node for subscribers "
-                "to observe, but read_only prevents that write."
-            )
-        self._kw["reactive"] = bool(value)
 
     # =========================================================================
     # READ ONLY PROPERTY
@@ -396,14 +338,12 @@ class BagResolver(BagResolverNamesMixin):
 
         If True, the resolved value is NOT stored in node._value.
         Constructor values override class defaults. Only when neither specifies a
-        policy is it derived from cache_time, interval, reactive:
-        no cache and no active trigger → read_only=True, otherwise read_only=False.
+        policy is it derived from cache_time:
+        no cache → read_only=True, otherwise read_only=False.
         """
         configured = self._kw.get("read_only")
         if configured is not None:
             return configured  # type: ignore[no-any-return]
-        if self._kw.get("interval") is not None or self._kw.get("reactive"):
-            return False
         return self.cache_time == 0
 
     # =========================================================================
@@ -429,29 +369,11 @@ class BagResolver(BagResolverNamesMixin):
     # CACHE MANAGEMENT
     # =========================================================================
 
-    def reset(self, refresh: bool = False) -> None:
-        """Invalidate the cache; refresh=True reloads and notifies synchronously."""
+    def reset(self) -> None:
+        """Invalidate the cache; the next explicit read reloads synchronously."""
         self._cache_last_update = None
-        if not refresh:
-            return
-        if self.read_only:
-            raise ValueError("reset(refresh=True) is incompatible with read_only=True")
-        if self._refresh_running:
-            return
-        self._refresh_running = True
-        try:
-            self._kw = self._build_effective_kw()
-            self._finalize_result_and_notify(self._invoke_load())
-        finally:
-            self._refresh_running = False
 
-    def _start_interval(self) -> None:
-        """Reject automatic scheduling; retained for node attachment compatibility."""
-        if self.interval is not None:
-            raise ValueError("interval is not supported; schedule refresh outside the Bag")
 
-    def _stop_interval(self) -> None:
-        """Compatibility hook: synchronous resolvers own no background timers."""
 
     @property
     def expired(self) -> bool:
@@ -509,8 +431,7 @@ class BagResolver(BagResolverNamesMixin):
             return self.cached_value
 
         # call_kwargs update the resolver state before the load. When attached,
-        # they go through node.attr (emitting upd_attrs and, when reactive,
-        # performing the refresh via the existing set_attr hook). Standalone
+        # they go through node.attr and invalidate the cache. Standalone
         # resolvers update _kw directly since there is no node.
         if call_kwargs:
             if self._parent_node is not None:
@@ -600,24 +521,6 @@ class BagResolver(BagResolverNamesMixin):
             self.cached_value = result
         return result
 
-    def _finalize_result_and_notify(self, result: Any) -> Any:
-        """Store result through the node mutation channel (active path).
-
-        Used by synchronous refresh and reactive parameter changes:
-        writes via parent_node.set_value(), which fires _on_node_changed
-        so subscribers receive an update event.
-
-        Falls back to silent write if the resolver has no parent_node or
-        is read_only (no observable target for the event).
-        """
-        result = self._prepare_result(result)
-        if self.read_only:
-            return result
-        if self._parent_node is not None:
-            self._parent_node.set_value(result)
-        else:
-            self.cached_value = result
-        return result
 
     @with_retry
     def _sync_sync_load(self) -> Any:
@@ -764,7 +667,7 @@ class BagCbResolver(BagSyncResolver):
         8
     """
 
-    class_kwargs = {"cache_time": 0, "interval": None, "read_only": False, "as_bag": False}
+    class_kwargs = {"cache_time": 0, "read_only": False, "as_bag": False}
     class_args = ["callback"]
     internal_params = BagResolver.internal_params | {"callback"}
 

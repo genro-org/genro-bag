@@ -24,10 +24,10 @@ reader, then call `replace`. This is not a merge: `setItem('', source)` keeps
 items absent from the source, whereas `replace` removes them.
 
 For example, Python can replace an existing destination from a file with
-`destination.replace(Bag(path))`. In JavaScript, decoded JSON can be applied
-with `destination.replace(Bag.fromJson(text))`.
+`destination.replace(Bag.from_file(path))`. In JavaScript, decoded JSON can be applied
+with `destination.replace(Bag.fromTytx(text))`.
 
-`fillFrom` is deprecated compatibility behavior, not the native replacement
-API. Python also retains deprecated `fill_from` in its names mixin. JavaScript
-retains `fillFrom` in the GenroJS mixin only. Internal constructors and readers
-use private population helpers and do not emit these deprecation warnings.
+Modern `fill_from(source, recursive=True)` / JS `fillFrom(source, {recursive: true})`
+replace contents from native dictionaries and lists. They are not deprecated.
+Python's camelCase `fillFrom` remains an explicit deprecated compatibility loader
+for historical mixed sources. Use `replace(other_bag)` to copy an existing Bag.

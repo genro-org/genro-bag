@@ -6,7 +6,7 @@ from genro_bag import Bag
 
 
 @pytest.mark.parametrize('type_code', ['BAG', 'bag'])
-@pytest.mark.parametrize('read', [Bag, Bag.from_xml])
+@pytest.mark.parametrize('read', [Bag.from_xml])
 @pytest.mark.parametrize('body', ['', '   '])
 def test_typed_empty_bag_survives_xml_read(type_code, read, body):
     xml = (
@@ -27,4 +27,4 @@ def test_typed_empty_bag_survives_xml_read(type_code, read, body):
 
 
 def test_plain_xml_empty_element_remains_text():
-    assert Bag('<root><empty/></root>')['root.empty'] == ''
+    assert Bag.from_xml('<root><empty/></root>')['root.empty'] == ''

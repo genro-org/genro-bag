@@ -184,7 +184,7 @@ positional names, declared defaults and internal options are excluded.
 
 The engine calls `on_loading` once before each actual `load()` attempt, with
 a shallow copy of the effective parameters. Cache hits do not prepare or load.
-Normal resolution and `reset(refresh=True)` share this preparation mechanism.
+Explicit reads use this preparation mechanism. `reset()` only invalidates the cache.
 Each retry prepares from persistent state, not from the preceding transformed
 copy. This does not change which entry points support retries.
 

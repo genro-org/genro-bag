@@ -31,13 +31,13 @@ class TestBagAsTytxCustomType:
 
     def test_from_tytx_of_an_empty_payload_is_an_empty_bag(self):
         """The branch-node marker decodes to a Bag with no children."""
-        bag = Bag.from_tytx("")
+        bag = Bag.from_tytx("::X")
         assert isinstance(bag, Bag)
         assert len(bag) == 0
 
     def test_from_tytx_of_empty_bytes_is_an_empty_bag(self):
         """The bytes twin of the empty payload decodes the same way."""
-        bag = Bag.from_tytx(b"", transport="msgpack")
+        bag = Bag.from_tytx(Bag().to_tytx("msgpack"), transport="msgpack")
         assert isinstance(bag, Bag)
         assert len(bag) == 0
 
@@ -54,7 +54,7 @@ class TestBagAsTytxCustomType:
         """
         bag = Bag()
         bag["a.b"] = 1
-        rows = json.loads(bag.to_tytx())["rows"]
+        rows = json.loads(bag._to_tytx_payload().removesuffix("::JS"))["rows"]
         assert rows[0][3] == "::X"
 
     def test_branch_nodes_still_round_trip(self):
@@ -116,10 +116,10 @@ class TestNestedBagJsonValues:
         inner = Bag({"x": 1, "y": "two"})
         source = Bag()
         source["payload"] = {"nested": inner}
-        restored = Bag.from_json(source.to_json())
-        assert isinstance(restored["payload.nested"], Bag)
-        assert restored["payload.nested.x"] == 1
-        assert restored["payload.nested.y"] == "two"
+        restored = Bag.from_tytx(source.to_tytx())
+        assert isinstance(restored["payload"]["nested"], Bag)
+        assert restored["payload"]["nested"]["x"] == 1
+        assert restored["payload"]["nested"]["y"] == "two"
 
 
 class TestNestedBagSigningRefusal:

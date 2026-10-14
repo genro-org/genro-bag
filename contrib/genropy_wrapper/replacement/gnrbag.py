@@ -26,6 +26,8 @@ import urllib.parse
 import urllib.request
 
 import genro_bag
+from genro_bag._resolver_wire import encode_attrs, encode_resolver
+from replacement._legacy_json import LegacyJsonParser
 from genro_bag.bagnode import BagNodeContainer, smartsplit
 from genro_bag.resolver import BagCbResolver as _NewBagCbResolver
 from genro_bag.resolver import BagResolver as _NewBagResolver
@@ -303,7 +305,7 @@ class BagNode(genro_bag.BagNode):
 
     def _get_fullpath(self):
         """Return fullpath or None — alias for original BagNode._get_fullpath()."""
-        return self.fullpath
+        return self.fullpath if self.parent_bag and self.parent_bag.backref else None
 
     # --- Label access ---
 
@@ -551,7 +553,7 @@ def _as_dict_deeply(bag, ascii=False, lower=False):
     return d
 
 
-class Bag(genro_bag.Bag):
+class Bag(LegacyJsonParser, genro_bag.Bag):
     """Bag wrapper with camelCase aliases for gnr.core.gnrbag compatibility.
 
     All original camelCase methods (getItem, setItem, addItem, getNode, etc.)
@@ -657,7 +659,7 @@ class Bag(genro_bag.Bag):
             self._import_nodes_with_duplicates(result)
         else:
             # Non-XML file — delegate to genro_bag.Bag.fill_from
-            genro_bag.Bag.fill_from(self, filepath)
+            self._fill_from_bag(genro_bag.Bag.from_file(filepath), self)
 
     def _copy_nodes_from(self, result):
         """Copy all nodes from result Bag into self, handling duplicates."""
@@ -753,9 +755,8 @@ class Bag(genro_bag.Bag):
 
     def getNode(self, path=None, asTuple=False, autocreate=False, default=None):
         """Get node at path with original parameter names."""
-        return self.get_node(
-            path=path, as_tuple=asTuple, autocreate=autocreate, default=default
-        )
+        node = self.get_node(path=path, autocreate=autocreate, default=default)
+        return (node.parent_bag, node) if asTuple and node is not None else node
 
     def popNode(self, path, _reason=None):
         """Remove and return BagNode at path."""
@@ -1116,7 +1117,9 @@ class Bag(genro_bag.Bag):
             static = kwargs.pop("static")
         else:
             static = "static" in _mode if isinstance(_mode, str) else bool(_mode)
-        return genro_bag.Bag.walk(self, callback=callback, static=static, **kwargs)
+        if callback is None:
+            return self._iter_nodes_with_paths(static=static)
+        return genro_bag.Bag.for_each(self, callback, static=static, deep=True, **kwargs)
 
     def traverse(self):
         """Generator yielding all BagNodes depth-first (original API).
@@ -1223,7 +1226,8 @@ class Bag(genro_bag.Bag):
 
     # --- XML serialization ---
 
-    def _node_to_xml(self, node, namespaces, self_closed_tags=None):
+    def _node_to_xml(self, node, namespaces, self_closed_tags=None,
+                     sign_key=None, expires_in=None, pretty=False, depth=0):
         """Override to add _T type annotations matching the original format.
 
         Adds _T="L" for int, _T="R" for float, _T="D" for date, etc.
@@ -1239,6 +1243,11 @@ class Bag(genro_bag.Bag):
         if original_tag is not None:
             attrs_parts.append(f"_tag={saxutils.quoteattr(original_tag)}")
 
+        where = f"node {node.label!r}"
+        if node.resolver is not None:
+            payload = encode_resolver(node.resolver, sign_key, expires_in, where)
+            attrs_parts.append(f"_resolver={saxutils.quoteattr(payload)}")
+
         value = node.get_value(static=True)
 
         # Add _T for typed values
@@ -1250,7 +1259,7 @@ class Bag(genro_bag.Bag):
             attrs_parts.append(f'_T="{t_code}"')
 
         if node.attr:
-            for k, v in node.attr.items():
+            for k, v in encode_attrs(node.attr, sign_key, expires_in, where).items():
                 if v is not None:
                     attr_type = _type_code(v)
                     if attr_type and attr_type not in ("T", ""):
@@ -1263,8 +1272,11 @@ class Bag(genro_bag.Bag):
         attrs_str = " " + " ".join(attrs_parts) if attrs_parts else ""
 
         if hasattr(value, "_bag_to_xml"):
-            inner = value._bag_to_xml(current_namespaces, self_closed_tags)
+            pretty = pretty and node.attr.get("xml:space") != "preserve"
+            inner = value._bag_to_xml(current_namespaces, self_closed_tags, sign_key, expires_in, pretty, depth + 1)
             if inner:
+                if pretty:
+                    return f"<{tag}{attrs_str}>\n{inner}\n{'  ' * depth}</{tag}>"
                 return f"<{tag}{attrs_str}>{inner}</{tag}>"
             if self_closed_tags is None or tag in self_closed_tags:
                 return f"<{tag}{attrs_str}/>"

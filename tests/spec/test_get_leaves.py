@@ -44,7 +44,7 @@ def test_leaves_resolve_uncached_nodes_once_per_occurrence():
 
 
 def test_shared_subtree_is_reported_at_both_paths():
-    child = Bag(leaf=1)
+    child = Bag({'leaf': 1})
     bag = Bag()
     bag.set_item('a', child)
     bag.set_item('b', child)

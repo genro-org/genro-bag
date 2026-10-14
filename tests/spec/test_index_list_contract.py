@@ -10,7 +10,7 @@ def test_index_list_resolves_branches_and_supports_text():
 
         def load(self):
             calls.append('load')
-            return Bag(name='Ada', empty=Bag())
+            return Bag({'name': 'Ada', 'empty': Bag()})
 
     bag = Bag()
     bag.set_item('customer', Resolver())
@@ -26,7 +26,7 @@ def test_index_list_resolves_branches_and_supports_text():
 
 
 def test_index_list_follows_get_index_shared_subtree_policy():
-    shared = Bag(leaf=1)
+    shared = Bag({'leaf': 1})
     bag = Bag()
     bag.set_item('a', shared)
     bag.set_item('b', shared)

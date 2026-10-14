@@ -53,11 +53,18 @@ from __future__ import annotations
 import json
 
 import pytest
+from contrib.genropy_wrapper.replacement._legacy_json import LegacyJsonParser
 from genro_toolbox import SignatureError, SignatureExpired
 
 from genro_bag import Bag, BagSerializationError
 from genro_bag.resolver import BagSyncResolver
 from genro_bag.resolvers import BagCbResolver, EnvResolver, UuidResolver
+
+
+class LegacyJsonBag(LegacyJsonParser, Bag):
+    """Exercise the legacy node decoder explicitly, never the public alias."""
+
+
 
 KEY = "server-side-secret"
 
@@ -95,7 +102,7 @@ class TestRoundTripValueSide:
     def test_json(self):
         b = Bag()
         b["id"] = UuidResolver("uuid4")
-        back = Bag.from_json(b.to_json())
+        back = LegacyJsonBag.from_json(b.to_json())
         assert isinstance(back.get_resolver("id"), UuidResolver)
 
     def test_tytx(self):
@@ -113,7 +120,7 @@ class TestRoundTripValueSide:
     def test_resolved_value_still_works(self):
         b = Bag()
         b["id"] = UuidResolver("uuid4")
-        back = Bag.from_json(b.to_json())
+        back = LegacyJsonBag.from_json(b.to_json())
         assert isinstance(back["id"], str)
         assert len(back["id"]) == 36
 
@@ -133,7 +140,7 @@ class TestRoundTripAttributeSide:
         monkeypatch.setenv("X_SECRET", "secret")
         b = Bag()
         b.set_item("n", "v", who=EnvResolver("X_SECRET"))
-        back = Bag.from_json(b.to_json())
+        back = LegacyJsonBag.from_json(b.to_json())
         assert back["n?who"] == "secret"
 
     def test_tytx(self, monkeypatch):
@@ -146,7 +153,7 @@ class TestRoundTripAttributeSide:
     def test_plain_attributes_untouched(self):
         b = Bag()
         b.set_item("n", "v", who=EnvResolver("HOME"), plain="x", num=3)
-        back = Bag.from_json(b.to_json())
+        back = LegacyJsonBag.from_json(b.to_json())
         assert back["n?plain"] == "x"
         assert back["n?num"] == 3
 
@@ -168,21 +175,21 @@ class TestNestedAndCombined:
         b["a"] = Bag()
         b["a.b"] = Bag()
         b["a.b.id"] = UuidResolver("uuid4")
-        back = Bag.from_json(b.to_json())
+        back = LegacyJsonBag.from_json(b.to_json())
         assert isinstance(back.get_resolver("a.b.id"), UuidResolver)
 
     def test_value_and_attribute_on_same_node(self, monkeypatch):
         monkeypatch.setenv("X_SECRET", "secret")
         b = Bag()
         b.set_item("n", UuidResolver("uuid4"), who=EnvResolver("X_SECRET"))
-        back = Bag.from_json(b.to_json())
+        back = LegacyJsonBag.from_json(b.to_json())
         assert isinstance(back.get_resolver("n"), UuidResolver)
         assert back["n?who"] == "secret"
 
     def test_node_tag_survives(self):
         b = Bag()
         b.set_item("n", UuidResolver("uuid4"), node_tag="item")
-        back = Bag.from_json(b.to_json())
+        back = LegacyJsonBag.from_json(b.to_json())
         assert back.get_node("n").node_tag == "item"
 
 
@@ -204,7 +211,7 @@ class TestSignedRoundTrip:
     def test_json(self):
         b = Bag()
         b["id"] = UuidResolver("uuid4")
-        back = Bag.from_json(b.to_json(sign_key=KEY), sign_key=KEY)
+        back = LegacyJsonBag.from_json(b.to_json(sign_key=KEY), sign_key=KEY)
         assert isinstance(back.get_resolver("id"), UuidResolver)
 
     def test_tytx(self):
@@ -217,7 +224,7 @@ class TestSignedRoundTrip:
         monkeypatch.setenv("X_SECRET", "secret")
         b = Bag()
         b.set_item("n", "v", who=EnvResolver("X_SECRET"))
-        back = Bag.from_json(b.to_json(sign_key=KEY), sign_key=KEY)
+        back = LegacyJsonBag.from_json(b.to_json(sign_key=KEY), sign_key=KEY)
         assert back["n?who"] == "secret"
 
 
@@ -228,13 +235,13 @@ class TestSignatureRejection:
         b = Bag()
         b["id"] = UuidResolver("uuid4")
         with pytest.raises(SignatureError):
-            Bag.from_json(b.to_json(sign_key=KEY), sign_key="another-secret")
+            LegacyJsonBag.from_json(b.to_json(sign_key=KEY), sign_key="another-secret")
 
     def test_unsigned_payload_when_key_expected(self):
         b = Bag()
         b["id"] = UuidResolver("uuid4")
         with pytest.raises(SignatureError):
-            Bag.from_json(b.to_json(), sign_key=KEY)
+            LegacyJsonBag.from_json(b.to_json(), sign_key=KEY)
 
     def test_expired_signature(self):
         b = Bag()
@@ -244,7 +251,7 @@ class TestSignatureRejection:
 
         time.sleep(1.1)
         with pytest.raises(SignatureExpired):
-            Bag.from_json(data, sign_key=KEY)
+            LegacyJsonBag.from_json(data, sign_key=KEY)
 
     def test_tampered_argument_is_refused(self):
         """Real case: client rewrites a parameter and sends it back.
@@ -263,7 +270,7 @@ class TestSignatureRejection:
 
         signed[0]["attr"]["who"] = theirs[0]["attr"]["who"]
         with pytest.raises(SignatureError):
-            Bag.from_json(json.dumps(signed), sign_key=KEY)
+            LegacyJsonBag.from_json(json.dumps(signed), sign_key=KEY)
 
     def test_unsigned_substitution_is_refused(self):
         """Sending unsigned payload back is not enough to pass."""
@@ -277,13 +284,64 @@ class TestSignatureRejection:
 
         signed[0]["attr"]["who"] = bare[0]["attr"]["who"]
         with pytest.raises(SignatureError):
-            Bag.from_json(json.dumps(signed), sign_key=KEY)
+            LegacyJsonBag.from_json(json.dumps(signed), sign_key=KEY)
 
     def test_attribute_side_rejection(self):
         b = Bag()
         b.set_item("n", "v", who=EnvResolver("HOME"))
         with pytest.raises(SignatureError):
-            Bag.from_json(b.to_json(sign_key=KEY), sign_key="another-secret")
+            LegacyJsonBag.from_json(b.to_json(sign_key=KEY), sign_key="another-secret")
+
+
+@pytest.mark.parametrize("container", ["dict", "list", "mixed"])
+@pytest.mark.parametrize("as_text", [False, True], ids=["native", "json-text"])
+@pytest.mark.parametrize("position", ["value", "attribute"])
+@pytest.mark.parametrize("signature", ["valid", "unsigned", "wrong-key", "tampered", "expired"])
+def test_nested_json_resolver_signature(monkeypatch, container, as_text, position, signature):
+    """Generic containers must retain signature requirements at every depth."""
+    monkeypatch.setattr(CountingResolver, "calls", 0)
+    monkeypatch.setattr("genro_toolbox.signing.time.time", lambda: 1000)
+    resolver = CountingResolver(tag="trusted")
+    bag = Bag()
+    if position == "value":
+        bag.set_item("n", resolver)
+    else:
+        bag.set_item("n", "v", who=resolver)
+
+    key = None if signature == "unsigned" else KEY
+    if signature == "wrong-key":
+        key = "another-secret"
+    source = json.loads(bag.to_json(typed=False, sign_key=key, expires_in=60))
+    if signature == "tampered":
+        holder = source[0] if position == "value" else source[0]["attr"]
+        field = "resolver" if position == "value" else "who"
+        payload, mac = holder[field].rsplit(".", 1)
+        holder[field] = f"{payload}.{'A' if mac[0] != 'A' else 'B'}{mac[1:]}"
+    if signature == "expired":
+        monkeypatch.setattr("genro_toolbox.signing.time.time", lambda: 1061)
+
+    if container == "dict":
+        source, path = {"wrapped": source}, "wrapped.n"
+    elif container == "list":
+        source, path = [source], "r_0.n"
+    else:
+        source, path = {"outer": [{"inner": [source]}]}, "outer.outer_0.inner.inner_0.n"
+    if as_text:
+        source = json.dumps(source)
+
+    if signature == "valid":
+        restored = LegacyJsonBag.from_json(source, sign_key=KEY)
+        if position == "value":
+            restored_resolver = restored.get_resolver(path)
+        else:
+            restored_resolver = restored.get_node(path).attr["who"]
+        assert isinstance(restored_resolver, CountingResolver)
+        assert restored_resolver.serialize() == resolver.serialize()
+    else:
+        error = SignatureExpired if signature == "expired" else SignatureError
+        with pytest.raises(error):
+            LegacyJsonBag.from_json(source, sign_key=KEY)
+    assert CountingResolver.calls == 0
 
 
 class TestPayloadWithSeparator:
@@ -293,7 +351,7 @@ class TestPayloadWithSeparator:
         monkeypatch.setenv("X.SECRET.DOTTED", "ok")
         b = Bag()
         b.set_item("n", "v", who=EnvResolver("X.SECRET.DOTTED"))
-        back = Bag.from_json(b.to_json(sign_key=KEY), sign_key=KEY)
+        back = LegacyJsonBag.from_json(b.to_json(sign_key=KEY), sign_key=KEY)
         assert back["n?who"] == "ok"
 
 
@@ -319,13 +377,13 @@ class TestInertness:
         b["x"] = CountingResolver(tag="a")
         data = b.to_json()
         CountingResolver.calls = 0
-        Bag.from_json(data)
+        LegacyJsonBag.from_json(data)
         assert CountingResolver.calls == 0
 
     def test_first_read_calls_load(self):
         b = Bag()
         b["x"] = CountingResolver(tag="a")
-        back = Bag.from_json(b.to_json())
+        back = LegacyJsonBag.from_json(b.to_json())
         CountingResolver.calls = 0
         assert back["x"] == "loaded-a"
         assert CountingResolver.calls == 1
@@ -433,7 +491,7 @@ class TestClassGuard:
             ]
         )
         with pytest.raises(ValueError, match="not a BagResolver subclass"):
-            Bag.from_json(forged)
+            LegacyJsonBag.from_json(forged)
 
     def test_module_level_function_is_refused(self):
         forged = json.dumps(
@@ -455,4 +513,4 @@ class TestClassGuard:
             ]
         )
         with pytest.raises(ValueError, match="not a BagResolver subclass"):
-            Bag.from_json(forged)
+            LegacyJsonBag.from_json(forged)

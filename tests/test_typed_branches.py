@@ -2,12 +2,25 @@
 """Contract: registered Bag subclasses retain mixed branch types on the wire."""
 
 import pytest
-from genro_tytx import from_tytx, register_class, to_tytx
+from genro_tytx import from_tytx, register_class, register_type, to_tytx
 
 from genro_bag import Bag, BagSerializationError
 
 
-@register_class
+def register_bag_type(cls):
+    register_type(cls, cls.__tytx_suffix__, lambda bag: bag._to_tytx_payload(), cls._from_tytx_payload)
+    return cls
+
+
+def marked_rows(data, transport):
+    text = to_tytx(data) + "::X"
+    if transport == "msgpack":
+        import msgpack
+        return msgpack.packb(msgpack.ExtType(4, ("X:" + text[:-3]).encode()))
+    return text
+
+
+@register_bag_type
 class TypedBranch(Bag):
     __tytx_suffix__ = "TESTBRANCH"
 
@@ -24,7 +37,7 @@ class TestTypedBranches:
         rows = [["", "future", None, "::UNKNOWNTYPE", {}], ["future", "child", None, 42, {}]]
         with pytest.raises(BagSerializationError, match="parent branch"):
             Bag.from_tytx(
-                to_tytx({"rows": rows}, None if transport == "json" else transport), transport
+                marked_rows({"rows": rows}, transport), transport
             )
 
     @pytest.mark.parametrize("transport", ["json", "msgpack"])
@@ -51,7 +64,7 @@ class TestTypedBranches:
         assert type(result["source"]["data"]) is Bag
 
 
-@register_class
+@register_bag_type
 class OtherBranch(Bag):
     __tytx_suffix__ = "OTHERTESTBRANCH"
 
@@ -77,7 +90,7 @@ def test_missing_parent(transport, paths, parent):
     if paths is not None:
         data["paths"] = paths
     with pytest.raises(BagSerializationError):
-        Bag.from_tytx(to_tytx(data, None if transport == "json" else transport), transport)
+        Bag.from_tytx(marked_rows(data, transport), transport)
 
 
 def test_literal_custom_scalar():

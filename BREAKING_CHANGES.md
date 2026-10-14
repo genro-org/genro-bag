@@ -1,5 +1,13 @@
 # Breaking changes
 
+## 0.28.0 — explicit ingestion and passive resolvers
+
+Read the [migration note](docs/migrations/next-ingestion-api.md). Constructors now
+accept only native dictionaries/lists or None. Modern from_json delegates to
+from_tytx; marked Bag serialization distinguishes rows from ordinary data.
+Timer, interval, reactive and reset(refresh=...) options are removed.
+
+
 ## 0.27.0
 
 ### `fired` in change events

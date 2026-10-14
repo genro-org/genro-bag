@@ -23,14 +23,13 @@ _current_transaction: ContextVar[list | None] = ContextVar(
 class BagEvents:
     """Mixin providing event subscription and propagation for Bag.
 
-    Manages four subscriber dicts (_upd, _ins, _del, _tmr) and propagates
+    Manages four subscriber dicts (_upd, _ins, _del, _txn) and propagates
     change/insert/delete events up the parent hierarchy via backref chain.
     """
 
     _upd_subscribers: dict
     _ins_subscribers: dict
     _del_subscribers: dict
-    _tmr_subscribers: dict
     _txn_subscribers: dict
     parent: Any
     parent_node: Any
@@ -142,28 +141,6 @@ class BagEvents:
                 node, ind, [self.parent_node.label] + pathlist, reason=reason
             )
 
-    def _on_timer_tick(self, subscriber_id: str) -> None:
-        """Trigger for timer events.
-
-        Propagates to parent unless the subscriber callback returns False.
-        """
-        entry = self._tmr_subscribers.get(subscriber_id)
-        if entry and entry["callback"](bag=self, evt="tmr", subscriber_id=subscriber_id) is False:
-            return
-        if self.parent and self.parent_node:
-            self.parent._on_timer_tick_propagate([self.parent_node.label])
-
-    def _on_timer_tick_propagate(self, pathlist: list) -> None:
-        """Propagate timer tick to parent subscribers.
-
-        Propagates to parent unless a subscriber callback returns False.
-        """
-        for s in list(self._tmr_subscribers.values()):
-            if s["callback"](bag=self, evt="tmr", subscriber_id=None, pathlist=pathlist) is False:
-                return
-        if self.parent and self.parent_node:
-            self.parent._on_timer_tick_propagate([self.parent_node.label] + pathlist)
-
     # -------------------- subscription --------------------------------
 
     def _subscribe(self, subscriber_id: str, subscribers_dict: dict, callback: Any) -> None:
@@ -177,8 +154,6 @@ class BagEvents:
         update: Any = None,
         insert: Any = None,
         delete: Any = None,
-        timer: Any = None,
-        interval: float | None = None,
         any: Any = None,
         transaction: Any = None,
     ) -> None:
@@ -189,17 +164,10 @@ class BagEvents:
             update: Callback for update events.
             insert: Callback for insert events.
             delete: Callback for delete events.
-            timer: Unsupported compatibility argument.
-            interval: Unsupported compatibility argument.
-            any: Callback for update, insert, and delete events (not timer/transaction).
+            any: Callback for update, insert, and delete events (not transaction).
             transaction: Callback for transaction events (separate category,
                 not covered by ``any``). Receives ``bag=<bag>, mutations=<list>``.
-
-        Raises:
-            ValueError: If timer or interval is supplied.
         """
-        if timer is not None or interval is not None:
-            raise ValueError("Timer subscriptions are not supported; schedule work outside the Bag")
         if not self.backref:
             self.set_backref()
         self._subscribe(subscriber_id, self._upd_subscribers, update or any)
@@ -213,7 +181,6 @@ class BagEvents:
         update: bool = False,
         insert: bool = False,
         delete: bool = False,
-        timer: bool = False,
         any: bool = False,
         transaction: bool = False,
     ) -> None:
@@ -224,8 +191,7 @@ class BagEvents:
             update: Remove update subscription.
             insert: Remove insert subscription.
             delete: Remove delete subscription.
-            timer: Remove timer subscription.
-            any: Remove update/insert/delete/timer subscriptions
+            any: Remove update/insert/delete subscriptions
                 (does not cover ``transaction``, which is a separate category).
             transaction: Remove transaction subscription.
         """
@@ -235,7 +201,5 @@ class BagEvents:
             self._ins_subscribers.pop(subscriber_id, None)
         if delete or any:
             self._del_subscribers.pop(subscriber_id, None)
-        if timer or any:
-            self._tmr_subscribers.pop(subscriber_id, None)
         if transaction:
             self._txn_subscribers.pop(subscriber_id, None)

@@ -40,12 +40,73 @@ class BagPopulate:
         def clear(self) -> None: ...
         def __iter__(self) -> Iterator: ...
 
+    def fill_from(self, source: dict | list | None = None, *, recursive: bool = True) -> Self:
+        """Atomically replace contents from native containers, with literal labels."""
+        if not isinstance(recursive, bool):
+            raise TypeError("recursive must be a bool")
+        prepared = self.__class__()
+        self._populate_into(prepared, source, recursive=recursive)
+        return self._replace_prepared(prepared)
+
+    def _append_literal(self, label: str, value: Any, attr=None, resolver=None, node_tag=None):
+        """Append a node to an offline Bag without interpreting label syntax."""
+        if not isinstance(label, str):
+            raise TypeError("Bag labels must be strings")
+        node = self._node_class(
+            self, label, None, attr=attr, resolver=resolver, node_tag=node_tag,
+            _remove_null_attributes=False,
+        )
+        if is_resolver(value):
+            node.resolver = value
+        else:
+            node._value = value
+        self._nodes[label] = node
+        return node
+
+    def _populate_into(self, target: Bag, source: Any, *, recursive: bool = True) -> None:
+        if source is None:
+            return
+        if not isinstance(source, (dict, list)):
+            raise TypeError(f"Bag source must be dict, list or None, got {type(source).__name__}")
+        active: set[int] = set()
+
+        def populate(bag, data, path):
+            if id(data) in active:
+                raise ValueError(f"Cyclic Bag source at {path}")
+            active.add(id(data))
+            try:
+                if isinstance(data, dict):
+                    entries = data.items()
+                else:
+                    width = len(str(len(data))) + 1
+                    entries = ((f"r_{i:0{width}d}", value) for i, value in enumerate(data))
+                for label, value in entries:
+                    if not isinstance(label, str):
+                        raise TypeError(f"Bag labels must be strings at {path}: {label!r}")
+                    if recursive and isinstance(value, (dict, list)):
+                        child = self.__class__()
+                        populate(child, value, f"{path}[{label!r}]")
+                        value = child
+                    bag._append_literal(label, value)
+            finally:
+                active.remove(id(data))
+
+        populate(target, source, "$")
+
+    @classmethod
+    def from_file(cls, path: str | Path, transport: str | None = None) -> Bag:
+        """Read an XML, .bag.json or .bag.mp file explicitly."""
+        target = cls()
+        target._fill_from_file(os.fspath(path), target, transport=transport)
+        return target
+
+
     def _load_source(self, source: Any = None, transport: str | None = None) -> Self:
         """Decode a construction/compatibility source before replacing contents."""
         if source is None:
             return self
         prepared = self.__class__()
-        self._populate_into(prepared, source, transport=transport)
+        self._populate_legacy_into(prepared, source, transport=transport)
         return self._replace_prepared(prepared)
 
     def replace(self, other: Bag) -> Self:
@@ -98,7 +159,7 @@ class BagPopulate:
 
         return self
 
-    def _populate_into(
+    def _populate_legacy_into(
         self, target: Bag, source: Any, transport: str | None = None
     ) -> None:
         """Dispatch source decoding and populate target in place.
@@ -120,7 +181,7 @@ class BagPopulate:
         elif isinstance(source, list):
             self._fill_from_list(source, target)
         elif isinstance(source, bytes):
-            self._populate_into(target, source.decode("utf-8").strip(), transport)
+            self._populate_legacy_into(target, source.decode("utf-8").strip(), transport)
         elif isinstance(source, Path):
             self._fill_from_file(str(source), target, transport=transport)
         elif isinstance(source, str):
@@ -239,10 +300,10 @@ class BagPopulate:
             value = node.get_value(static=True)
             if safe_is_instance(value, _IS_BAG):
                 value = value.__class__().replace(value)
-            new_node = target.set_item(
+            new_node = target._append_literal(
                 node.label,
                 value,
-                _attributes=dict(node.attr),
+                attr=dict(node.attr),
                 resolver=copy.deepcopy(node.resolver, {id(node): None}),
                 node_tag=node.node_tag,
             )
@@ -333,8 +394,8 @@ class BagPopulate:
             attr = {k: self._copy_resolver(v) if is_resolver(v) else v
                     for k, v in node.attr.items()}
             resolver = self._copy_resolver(node.resolver) if node.resolver is not None else None
-            copied = result.set_item(
-                node.label, value, _attributes=attr, resolver=resolver, node_tag=node.node_tag
+            copied = result._append_literal(
+                node.label, value, attr=attr, resolver=resolver, node_tag=node.node_tag
             )
             copied.xml_tag = node.xml_tag
         return result
@@ -343,8 +404,7 @@ class BagPopulate:
         """Rebuild a resolver from its own parameters.
 
         Reuses the serialize/deserialize pair rather than copy.deepcopy:
-        a resolver holds a back-reference to its node and, for the active
-        ones, a live timer — neither should be duplicated.
+        a resolver holds a back-reference to its node, which should not be duplicated.
         """
         return resolver.deserialize(resolver.serialize())
 
@@ -357,7 +417,6 @@ class BagPopulate:
             "_upd_subscribers",
             "_ins_subscribers",
             "_del_subscribers",
-            "_tmr_subscribers",
             "_txn_subscribers",
         ):
             state[name] = {}
@@ -436,7 +495,7 @@ class BagPopulate:
             )
 
         if isinstance(source, str):
-            source = self.__class__(source)
+            source = self.__class__()._load_source(source)
 
         if isinstance(source, Mapping):
             for label, value in source.items():

@@ -148,3 +148,6 @@ Thumbs.db
 # Temporary files
 temp/*
 !temp/.gitignore
+
+# uv lockfile (local uv runs; CI installs with pip)
+uv.lock

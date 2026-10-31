@@ -94,21 +94,26 @@ class BagResolver(BagResolverNamesMixin):
     configurable duration.
 
     Parameter Flow:
-        Parameters come from two sources, with priority (highest first):
-        1. node.attr: attributes on the parent BagNode (mutable)
+        The resolver inputs are the keys declared at construction
+        (class_args, class_kwargs, extra constructor kwargs). Their values
+        come from two sources, with priority (highest first):
+        1. node.attr: attributes on the parent BagNode, declared keys only
         2. resolver._kw: defaults set at resolver construction
 
-        Passing kwargs to the call (get_item/get_value) is syntactic sugar
-        for set_attr(**kwargs) followed by the read: changing arguments is
-        modelled as "updating the resolver state", not as a transient
-        override. This preserves the invariant that a cached value is always
-        coherent with the current node.attr.
+        A node attribute the resolver does not declare (UI metadata such as
+        '__checked') never reaches load() and never invalidates the cache.
+        set_attr on a declared key changes the input permanently.
+
+        Passing kwargs to the call (get_item/get_value) is a one-off read:
+        load() runs with the kwargs added for that call only, undeclared
+        keys included. The result is not cached, node.attr is untouched
+        and no event is emitted.
 
         Example flow:
-            bag.get_item('data', x=10)
-                ≡ bag.set_attr('data', x=10); bag['data']
-                -> merge node.attr (x=10) with resolver._kw (defaults)
-                -> load(); cache + node.attr stay coherent
+            bag.set_attr('data', x=10); bag['data']
+                -> load() with x=10; cache coherent with node.attr
+            bag.get_item('data', x=20)
+                -> load() with x=20; node.attr and cache keep x=10
 
     read_only Mode:
         - read_only=True: Result is NOT stored in node._value. If cache_time is
@@ -405,40 +410,30 @@ class BagResolver(BagResolverNamesMixin):
 
         Args:
             static: If True, return cached value without triggering load.
-            **call_kwargs: Parameters for this call. They update node.attr
-                (or resolver._kw for standalone resolvers) — "changing
-                arguments = updating resolver state". No temporary overrides.
+            **call_kwargs: Parameters for this call only, undeclared keys
+                included. A read with kwargs is a one-off read: it neither
+                uses nor writes any cache, does not touch node.attr and
+                emits no event. set_attr is the way to change inputs.
 
         Returns:
             The resolved value, synchronously in every execution context.
 
         Semantic rule:
-            node.attr is the current input of the resolver. When cached,
-            node._value is coherent with node.attr. Passing kwargs updates
-            node.attr (visible to subscribers via upd_attrs) and then runs
-            the normal pull path — so the new cached value is coherent with
-            the new attributes.
-
-            Standalone resolvers (no parent_node) update self._kw directly.
+            node.attr is the current input of the resolver for declared
+            parameters. When cached, the value is coherent with node.attr.
 
         Parameter Priority (highest to lowest at merge time):
-            1. node.attr: Attributes on the parent node (if attached)
-            2. resolver._kw: Defaults from construction
+            1. call_kwargs: this call only
+            2. node.attr: Attributes on the parent node (if attached)
+            3. resolver._kw: Defaults from construction
         """
         if static:
             if self._parent_node is not None:
                 return self._parent_node._value
             return self.cached_value
 
-        # call_kwargs update the resolver state before the load. When attached,
-        # they go through node.attr and invalidate the cache. Standalone
-        # resolvers update _kw directly since there is no node.
         if call_kwargs:
-            if self._parent_node is not None:
-                self._parent_node.set_attr(**call_kwargs)
-            else:
-                self._kw.update(call_kwargs)
-                self._cache_last_update = None
+            return self._load_once(self._build_effective_kw() | call_kwargs)
 
         # Cache policy is independent from where the result is stored.
         if not self.expired:
@@ -465,12 +460,26 @@ class BagResolver(BagResolverNamesMixin):
         self._kw = effective_kw
         return self._dispatch_load()
 
+    def _load_once(self, params: dict[str, Any]) -> Any:
+        """Load with params for this call only; the result is never stored.
+
+        load() reads its parameters from self._kw, so params replace it for
+        the duration of the synchronous load and the persistent state is
+        restored afterwards.
+        """
+        persistent_kw = self._kw
+        self._kw = params
+        try:
+            return self._sync_load_once()
+        finally:
+            self._kw = persistent_kw
+
     def _dispatch_load(self) -> Any:
         """Load directly on the caller's thread in every execution context."""
         return self._sync_sync_load()
 
     def _prepare_result(self, result: Any) -> Any:
-        """Common post-load processing: as_bag conversion + timestamp update.
+        """Common post-load processing: as_bag conversion and on_loaded hook.
 
         Conversion to Bag (controlled by as_bag parameter):
         - as_bag=True: always convert to Bag if possible
@@ -506,7 +515,6 @@ class BagResolver(BagResolverNamesMixin):
                     pass  # Not convertible to Bag — keep original result
         result = self.on_loaded(result)
         self._require_sync_result(result)
-        self._cache_last_update = datetime.now()
         return result
 
     def _finalize_result(self, result: Any) -> Any:
@@ -517,6 +525,7 @@ class BagResolver(BagResolverNamesMixin):
         a read, not a semantic mutation.
         """
         result = self._prepare_result(result)
+        self._cache_last_update = datetime.now()
         if not self.read_only or self.cache_time != 0:
             self.cached_value = result
         return result
@@ -526,6 +535,11 @@ class BagResolver(BagResolverNamesMixin):
     def _sync_sync_load(self) -> Any:
         """Sync resolver in sync context - calls load()."""
         return self._finalize_result(self._invoke_load())
+
+    @with_retry
+    def _sync_load_once(self) -> Any:
+        """Load for a one-off read: the prepared result is not stored."""
+        return self._prepare_result(self._invoke_load())
 
     @staticmethod
     def _require_sync_result(result: Any) -> None:

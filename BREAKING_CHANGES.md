@@ -1,5 +1,25 @@
 # Breaking changes
 
+## Unreleased
+
+### Read-time resolver kwargs are a one-off read (#75)
+
+`get_item(path, **kwargs)`, `node.get_value(**kwargs)`, `resolver(**kwargs)`
+and path syntax (`bag['path?x=1']`) load with the kwargs for that call only.
+The result is not cached, `node.attr` is untouched and no event is emitted.
+This restores the behaviour before 0.17 (#45), whose reasons (async loads and
+`reactive`) no longer exist.
+
+- Code that relied on `get_item(path, x=1)` writing `x` into `node.attr` must
+  call `set_attr(path, x=1)` before reading.
+- Undeclared call kwargs reach `load()` again when the resolver is attached to
+  a node; since #45 they were dropped silently.
+- Repeated reads with the same kwargs call `load()` every time.
+
+Resolver inputs from node attributes are unchanged (#74): only the parameters
+declared at construction are read from `node.attr` and invalidate the cache.
+
+
 ## 0.28.0 — explicit ingestion and passive resolvers
 
 Read the [migration note](docs/migrations/next-ingestion-api.md). Constructors now

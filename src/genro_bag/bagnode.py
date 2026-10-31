@@ -267,8 +267,8 @@ class BagNode(BagNodeNamesMixin):
                   resolver (requires ``self._resolver``).
                 Values can include type suffix: 'price=34::F' for float
                 conversion.
-            **kwargs: Parameters passed to the node's own resolver. These
-                have the highest priority in the parameter merge chain.
+            **kwargs: Parameters passed to the node's own resolver for this
+                call only (one-off read: no cache, node.attr untouched).
 
         Returns:
             The node's value, possibly resolved via resolver.
@@ -474,11 +474,11 @@ class BagNode(BagNodeNamesMixin):
         """Set the node's resolver, establishing bidirectional link.
 
         The resolver reads parameters from three sources with priority:
-        1. call_kwargs passed to resolver()
-        2. node attributes (set via set_attr)
+        1. call_kwargs passed to resolver() (one-off read, never cached)
+        2. node attributes (set via set_attr), declared parameters only
         3. resolver default parameters (_kw)
 
-        Cache is automatically invalidated when effective parameters change.
+        Cache is invalidated when a declared parameter changes via set_attr.
         """
         if self._resolver is not None and self._resolver is not resolver:
             self._resolver.parent_node = None

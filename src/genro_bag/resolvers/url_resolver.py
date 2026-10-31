@@ -85,7 +85,8 @@ class UrlResolver(BagResolver):
         Builds the full URL with query string, makes the HTTP request,
         and returns the response based on configuration.
 
-        Dynamic parameters (via get_item kwargs):
+        Dynamic parameters (declared at construction and changed with
+        set_attr, or passed to a one-off read via get_item kwargs):
             _body: Request body (overrides constructor body).
             arg_0, arg_1, ...: Path parameters to substitute {placeholders}.
             Other kwargs: Query string parameters (merged with constructor qs).
@@ -105,7 +106,7 @@ class UrlResolver(BagResolver):
         body: Bag | dict | None = self.body
         timeout = self.timeout
 
-        # Extract dynamic parameters from _kw (passed via get_item kwargs)
+        # Extract dynamic parameters: declared ones or one-off read kwargs
         # _body overrides constructor body
         if "_body" in self.kwargs:
             body = self._body

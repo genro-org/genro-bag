@@ -104,8 +104,8 @@ def test_nested_call_restores_outer_prepared_parameters():
     resolver = Nested(3)
     assert resolver() == 6
     assert resolver.preparations == 2
-    # Explicit call-time changes remain persistent; preparation does not.
-    assert resolver.value == 4
+    # Call-time kwargs are a one-off read: neither they nor preparation persist.
+    assert resolver.value == 3
 
 
 def test_nested_hook_failure_restores_outer_context():
@@ -122,7 +122,7 @@ def test_nested_hook_failure_restores_outer_context():
 
     resolver = Nested(3)
     assert resolver() == 6
-    assert resolver.value == 4
+    assert resolver.value == 3
 
 
 @pytest.mark.parametrize('result,error', [(None, TypeError), ({}, ValueError)])

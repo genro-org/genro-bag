@@ -112,15 +112,23 @@ The `_body` parameter:
 
 ## Parameter Priority
 
-When multiple sources provide the same parameter:
+The resolver inputs are the parameters declared at construction: positional
+arguments, `class_kwargs` and extra constructor kwargs. When multiple sources
+provide the same parameter:
 
-1. **Node attributes** (`bag.set_attr('node', param=value)`)
-2. **Resolver defaults** (lowest priority)
+1. **Call kwargs and path syntax** (this read only)
+2. **Node attributes** (`bag.set_attr('node', param=value)`), declared parameters only
+3. **Resolver defaults** (lowest priority)
 
-Path syntax and call kwargs are **not a third source**: they are shortcuts for
-writing into node.attr before the read. So `bag.get_item('calc', factor=7)` is
-equivalent to `bag.set_attr('calc', factor=7); bag['calc']` — the update
-persists on the node. This keeps the cached value coherent with node.attr.
+`set_attr` on a declared parameter changes the input permanently and
+invalidates the cache. A node attribute the resolver does not declare (UI
+metadata such as `__checked`) never reaches `load()` and never invalidates the
+cache. A parameter meant to change after construction is declared in the
+constructor, with `None` if it has no initial value.
+
+Call kwargs and path syntax are a **one-off read**: `load()` runs with them for
+that call only, undeclared keys included. The result is not cached, node.attr
+is untouched and no event is emitted.
 
 ```python
 bag['calc'] = BagCbResolver(multiply, base=10, factor=2)  # defaults
@@ -128,8 +136,8 @@ bag['calc'] = BagCbResolver(multiply, base=10, factor=2)  # defaults
 bag.set_attr('calc', factor=3)  # node attribute
 bag['calc']                     # 30 (uses node attr factor=3)
 
-bag.get_item('calc', factor=7)  # 70; node.attr now has factor=7
-bag['calc']                     # 70 (state persists)
+bag.get_item('calc', factor=7)  # 70 for this read only
+bag['calc']                     # 30 (node attr and cache unchanged)
 ```
 
 ## Navigating Resolved Values

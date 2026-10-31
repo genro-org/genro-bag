@@ -14,15 +14,15 @@ Source: [`examples/resolvers/resolver_parameters/`](../../examples/resolvers/res
 
 ### Parameter Priority
 
-When a resolver is called, parameters come from two sources (highest priority first):
+When a resolver is called, parameters come from three sources (highest priority first):
 
-1. **node.attr**: Attributes set on the parent BagNode (mutable)
-2. **resolver._kw**: Default parameters set at resolver construction
+1. **call kwargs**: Parameters passed to this read only
+2. **node.attr**: Attributes set on the parent BagNode, for declared parameters only
+3. **resolver._kw**: Default parameters set at resolver construction
 
-Passing kwargs at call time (`bag.get_item('path', x=10)`) is syntactic sugar
-for `set_attr(x=10)` followed by the read — the call updates node.attr so the
-cached value stays coherent with it. "Changing arguments = updating resolver
-state" (no transient overrides).
+Passing kwargs at call time (`bag.get_item('path', x=10)`) is a one-off read:
+the result is not cached and node.attr is untouched. `set_attr(x=10)` is the
+way to change a parameter permanently.
 
 ### Basic Example with BagCbResolver
 
@@ -45,13 +45,13 @@ state" (no transient overrides).
 >>> bag['calc']
 50
 >>>
->>> # Pass kwargs at call time: updates node.attr and loads
+>>> # Pass kwargs at call time: one-off read
 >>> bag.get_item('calc', multiplier=10)
 100
 >>>
->>> # The update persists: node.attr now has multiplier=10
+>>> # Node attributes and cache are unchanged: multiplier=5
 >>> bag['calc']
-100
+50
 ```
 
 ### Query String Syntax in Path
@@ -82,7 +82,7 @@ Parameters can also be passed directly in the path using query string syntax:
 
 ### Cache Invalidation
 
-Cache is automatically invalidated when effective parameters change:
+Cache is invalidated when a declared parameter changes via `set_attr`:
 
 ```python
 >>> bag = Bag()
@@ -108,21 +108,19 @@ node.get_value(**call_kwargs)
     v
 resolver(static=False, **call_kwargs)
     |
-    +--- if call_kwargs:
-    |       node.set_attr(**call_kwargs)   # write into node.attr
-    |
     v
-+------------------------------------------+
-| effective_kw = {}                         |
-| effective_kw.update(resolver._kw)     # 2 |
-| effective_kw.update(node.attr)        # 1 |  (node.attr now has the call_kwargs)
-+------------------------------------------+
++-----------------------------------------------------+
+| effective_kw = {}                                    |
+| effective_kw.update(resolver._kw)                # 3 |
+| effective_kw.update(node.attr, declared keys)    # 2 |
+| effective_kw.update(call_kwargs)                 # 1 |
++-----------------------------------------------------+
     |
     v
 resolver()  # prepares parameters once, then calls load()
     |
     v
-result (cached if cache_time != 0)
+result (cached if cache_time != 0 and no call_kwargs)
 ```
 
 ---

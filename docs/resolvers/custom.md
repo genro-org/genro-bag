@@ -189,8 +189,8 @@ Each retry prepares from persistent state, not from the preceding transformed
 copy. This does not change which entry points support retries.
 
 During `load()`, attributes and `kwargs` expose the prepared parameters. Outside
-`load()`, they expose persistent parameters without running hooks. Explicit
-call-time updates still change persistent state as before. Preparation itself
+`load()`, they expose persistent parameters without running hooks. Call-time
+kwargs are a one-off read and do not change persistent state. Preparation itself
 does not. The temporary context is restored on success or failure, including
 nested resolutions on the same resolver. This does not make Bags thread-safe.
 

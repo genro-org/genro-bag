@@ -362,14 +362,66 @@ class TestParameterPriority:
         bag.set_attr("x", a=50)
         assert bag["x"] == 100
 
-    def test_call_kwargs_update_node_attr(self):
-        """get_item(path, **kw) writes the kwargs to node.attr and then calls load."""
+    def test_call_kwargs_are_a_one_off_read(self):
+        """get_item(path, **kw) loads with kw for that call only: node.attr,
+        the cached value and the following reads are unchanged."""
+        calls = {"n": 0}
+
+        def cb(units):
+            calls["n"] += 1
+            return units
+
         bag = Bag()
-        bag["x"] = BagCbResolver(lambda a: a * 3, a=1, cache_time=0)
-        result = bag.get_item("x", a=7)
-        assert result == 21
-        # the new value stays in node.attr
-        assert bag.get_attr("x", "a") == 7
+        bag["x"] = BagCbResolver(cb, units="fahrenheit", cache_time=-1)
+        assert bag["x"] == "fahrenheit"
+        assert bag.get_item("x", units="celsius") == "celsius"
+        assert bag.get_attr("x", "units") is None
+        assert bag.get_item("x", static=True) == "fahrenheit"
+        assert bag["x"] == "fahrenheit"
+        assert calls["n"] == 2
+
+    def test_call_kwargs_one_off_read_is_not_cached(self):
+        """Repeated one-off reads call load every time."""
+        calls = {"n": 0}
+
+        def cb(units):
+            calls["n"] += 1
+            return units
+
+        bag = Bag()
+        bag["x"] = BagCbResolver(cb, units="fahrenheit", cache_time=-1, read_only=True)
+        assert bag.get_item("x", units="celsius") == "celsius"
+        assert bag.get_item("x", units="celsius") == "celsius"
+        assert bag["x"] == "fahrenheit"
+        assert calls["n"] == 3
+
+    def test_call_kwargs_accept_undeclared_keys(self):
+        """An undeclared call kwarg reaches load, attached or standalone."""
+        received = []
+
+        def cb(**kw):
+            received.append(kw)
+            return len(received)
+
+        bag = Bag()
+        bag["x"] = BagCbResolver(cb, a=1, cache_time=-1)
+        bag.get_item("x", page=2)
+        standalone = BagCbResolver(cb, a=1)
+        standalone(page=3)
+        assert received == [{"a": 1, "page": 2}, {"a": 1, "page": 3}]
+        assert bag.get_attr("x", "page") is None
+        assert standalone() == 3
+        assert received[-1] == {"a": 1}
+
+    def test_call_kwargs_emit_no_event(self):
+        """A one-off read is not a mutation: subscribers see nothing."""
+        events = []
+        bag = Bag()
+        bag["x"] = BagCbResolver(lambda a: a, a=1, cache_time=-1)
+        bag["x"]
+        bag.subscribe("watch", any=lambda **kw: events.append(kw))
+        bag.get_item("x", a=7)
+        assert events == []
 
     def test_set_attr_on_resolver_param_invalidates_cache(self):
         """On a resolver with cache_time=-1 and NON-reactive, changing an attr
@@ -396,6 +448,23 @@ class TestParameterPriority:
         # next access recomputes with the new parameter
         assert bag["x"] == 20
         assert calls["n"] == 2
+
+    @pytest.mark.parametrize("cache_time", [-1, 60])
+    def test_undeclared_attr_is_not_a_resolver_input(self, cache_time):
+        """An attribute the resolver does not declare (UI metadata such as
+        '__checked') never reaches load and never invalidates the cache."""
+        received = []
+
+        def cb(**kw):
+            received.append(kw)
+            return len(received)
+
+        bag = Bag()
+        bag["x"] = BagCbResolver(cb, cache_time=cache_time, multiplier=5)
+        assert bag["x"] == 1
+        bag.set_attr("x", __checked=True, checked=True)
+        assert bag["x"] == 1
+        assert received == [{"multiplier": 5}]
 
 
 # =============================================================================

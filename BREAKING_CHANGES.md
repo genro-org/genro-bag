@@ -1,6 +1,6 @@
 # Breaking changes
 
-## Unreleased
+## 0.29.0 — resolver inputs and one-off reads
 
 ### Read-time resolver kwargs are a one-off read (#75)
 
